@@ -125,3 +125,41 @@ same finding as section 2, arrived at independently, and it is the single most i
   misconfigured tablet retrying a wrong PIN every second holds a booth operator out for as long as it keeps
   retrying, in the middle of a live event, with no admin override. Phase 0 adds an admin unlock and a
   queryable "is this operator locked, and until when" so the control room can see and clear it.
+
+---
+
+## 7. Applied in 0008 and 0009 — verified
+
+`assert_schema_locked()` returns **zero rows** against the live database, and both Supabase WARN-level
+advisories about `wall_photos` being callable by `anon` are gone. What changed:
+
+- The default-privilege faucet is **shut for the `postgres` grantor** — new tables, sequences and functions in
+  `public` now grant only to `postgres` and `service_role`. Verified: `pg_default_acl` for `postgres` reads
+  `{postgres, service_role}` on all three object types.
+- **No function in `public` is callable by `anon` or `authenticated`** — the count is zero, `wall_photos`
+  included. The anon key can no longer reach the database at all; every surface goes through the Edge Function
+  API layer. That is law 9 taken literally.
+- `wall_photos` returns `(id, kind, thumb_path, created_at)`. **`storage_path` is gone from the type**, so the
+  wall cannot name an original even by mistake. Law 7 is dead for reads.
+- A photo cannot be `ready` without a thumbnail, so nothing can be approved that would force a wall to fall
+  back to an original.
+- Nine constraints carry `event_id` into every foreign key on `photos` and `ai_jobs`, so a cross-event
+  reference is refused by the database rather than by a function body.
+- The four functions that returned `setof operators` no longer exist in that form; `pin_hash` is not in any
+  return type, and setting a PIN returns nothing at all.
+
+### The residual we cannot close, recorded honestly
+
+`supabase_admin`'s default privileges in `public` still grant everything to `anon`, and `postgres` is not a
+member of that role on a managed project, so no migration of ours can revoke them. This is inert for our
+schema — every object we create is created by `postgres` — and `assert_schema_locked()`'s `anon_grant` check
+reads actual table ACLs regardless of who created them, so an object arriving by that route is still caught.
+It is written down here so it is never mistaken for something that was overlooked.
+
+### A lesson that changed how migrations get written
+
+`assert_schema_locked()` was created successfully by `0008` and then failed the moment it was called, because
+the older migrations' `set check_function_bodies = off` meant its body was never parsed. A backstop that only
+breaks when you call it reads as green until the day it matters. From `0009` onward, migrations leave body
+checking **on**, and any migration that installs an invariant **calls it before finishing**, so applying the
+migration is itself the proof.
