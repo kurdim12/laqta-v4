@@ -337,6 +337,10 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       p_kind: ctx.body.kind ?? "original",
       p_storage_path: ctx.body.storagePath, p_thumb_path: ctx.body.thumbPath,
       p_bytes: ctx.body.bytes ?? null,
+      p_device_id: ctx.body.deviceId ?? null,
+      p_client_captured_at: ctx.body.clientCapturedAt ?? null,
+      p_capture_source: ctx.body.captureSource ?? "booth",
+      p_restyle_intent: ctx.body.restyleIntent ?? "straight",
     }));
   },
 

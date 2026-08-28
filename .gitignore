@@ -44,3 +44,6 @@ test-results/
 playwright-report/
 blob-report/
 .cache/
+
+# The packaged deploy artifact — produced fresh by `npm run build`, never committed
+laqta-v3-dist.zip

@@ -1,0 +1,132 @@
+/* LAQTA v3 — one stylesheet, direction-agnostic.
+ *
+ * There is no separate RTL sheet. Every inline offset uses a logical property
+ * (margin-inline, padding-inline, inset-inline, text-align: start/end), so the same rules
+ * lay out correctly in Arabic and English and there is no second file to fall behind. */
+
+:root {
+  --bg: #0e0e10;
+  --surface: #17171b;
+  --surface-2: #1f1f25;
+  --line: #2c2c34;
+  --text: #f4f4f5;
+  --muted: #a1a1aa;
+  --brand: #e8c07a;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --radius: 14px;
+  --gap: 16px;
+
+  color-scheme: dark;
+  font-family: "Noto Sans Arabic", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Arabic needs a little more line height than Latin to stay comfortable. */
+html[lang="ar"] body { line-height: 1.75; }
+html[lang="en"] body { line-height: 1.55; }
+
+a { color: var(--brand); text-decoration: none; }
+
+.shell { display: flex; flex-direction: column; min-height: 100%; }
+
+.topbar {
+  display: flex; align-items: center; gap: var(--gap);
+  padding: 12px 20px;
+  border-block-end: 1px solid var(--line);
+  background: var(--surface);
+  position: sticky; inset-block-start: 0; z-index: 10;
+}
+.topbar .grow { flex: 1; }
+.brandmark { font-weight: 700; letter-spacing: .04em; }
+.brandmark small { color: var(--muted); font-weight: 400; margin-inline-start: 10px; }
+
+.main { flex: 1; padding: 20px; max-width: 1100px; width: 100%; margin-inline: auto; }
+.main.wide { max-width: none; padding: 0; }
+
+h1 { font-size: 1.5rem; margin: 0 0 6px; }
+h2 { font-size: 1.1rem; margin: 24px 0 10px; }
+p.lede { color: var(--muted); margin: 0 0 20px; }
+
+.grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 18px;
+}
+.card h3 { margin: 0 0 6px; font-size: 1rem; }
+.card p { margin: 0; color: var(--muted); font-size: .9rem; }
+a.card:hover { border-color: var(--brand); }
+
+label { display: block; margin-block-end: 12px; font-size: .9rem; color: var(--muted); }
+label span { display: block; margin-block-end: 6px; }
+
+input, select, textarea {
+  width: 100%; padding: 11px 13px; font: inherit; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+  text-align: start;
+}
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+button {
+  font: inherit; font-weight: 600; cursor: pointer;
+  padding: 11px 18px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--text);
+}
+button:hover:not(:disabled) { border-color: var(--brand); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.primary { background: var(--brand); color: #1a1a1a; border-color: var(--brand); }
+button.danger { color: var(--bad); }
+button.ghost { background: transparent; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+.notice { padding: 12px 14px; border-radius: 10px; margin-block-end: 16px; font-size: .92rem; }
+.notice.bad  { background: #3b1418; color: #fecaca; border: 1px solid #7f1d1d; }
+.notice.warn { background: #3a2c0d; color: #fde68a; border: 1px solid #78571a; }
+.notice.ok   { background: #0f2e1c; color: #bbf7d0; border: 1px solid #166534; }
+
+.pill { font-size: .75rem; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.pill.ok { color: var(--ok); border-color: #166534; }
+.pill.warn { color: var(--warn); border-color: #78571a; }
+.pill.bad { color: var(--bad); border-color: #7f1d1d; }
+
+table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+th, td { text-align: start; padding: 10px; border-block-end: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; }
+
+.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--surface-2); }
+.tile .meta { padding: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tile .actions { padding: 0 10px 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.tile .actions button { padding: 7px 11px; font-size: .82rem; }
+
+/* The wall. Full bleed, no chrome, readable from across a room. */
+.wall { min-height: 100vh; background: #000; display: flex; flex-direction: column; }
+.wall-grid { flex: 1; display: grid; gap: 8px; padding: 8px;
+             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); align-content: start; }
+.wall-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; display: block; }
+.wall-empty { flex: 1; display: grid; place-items: center; color: var(--muted); font-size: 1.4rem; }
+.wall-banner { padding: 18px; text-align: center; font-size: 1.6rem; font-weight: 700;
+               background: var(--brand); color: #1a1a1a; }
+.wall-state { position: fixed; inset-block-end: 14px; inset-inline-end: 14px;
+              background: rgba(0,0,0,.7); padding: 7px 13px; border-radius: 999px;
+              font-size: .8rem; color: var(--muted); }
+
+.center { min-height: 60vh; display: grid; place-items: center; }
+.panel { width: 100%; max-width: 380px; }
+
+.muted { color: var(--muted); }
+.spacer { height: 20px; }

@@ -1,0 +1,14 @@
+{
+  "name": "LAQTA",
+  "short_name": "LAQTA",
+  "description": "Live event photography by MaraNasi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
