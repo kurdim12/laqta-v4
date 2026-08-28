@@ -89,3 +89,39 @@ Applied migrations are frozen, so each of these arrives as a **new** numbered mi
 - The twelve id-only RPCs need an event argument and a matching predicate. The structural version of this fix is
   `unique (id, event_id)` on `photos` and `operators` plus composite foreign keys on `ai_jobs`, so a
   cross-event row simply cannot be referenced.
+
+---
+
+## 6. What the adversarial pass overturned
+
+Three things the audit called structurally safe were attacked and did not survive. All three were re-checked
+against the live database before being written down here.
+
+**The pinned `search_path` is a snapshot, not an invariant.** Migration `0007` pinned `search_path` on all 36
+functions, and all 36 are still pinned today. But `create or replace function` replaces a function's
+configuration wholesale — omit the `set search_path` clause in a future migration and the pin is silently gone.
+`pg_event_trigger` holds six rows, all Supabase stock, and **none of them inspects `pg_proc.proconfig`**
+(verified: zero non-stock event triggers). So nothing prevents the next migration from un-pinning a
+`security definer` function and reopening the escalation path. The gate must assert the pin, and an event
+trigger should reject an unpinned `security definer` function outright.
+
+**The minimal EXECUTE surface is also a snapshot.** It is minimal because `apply_function_grants()` was run once
+by hand, over a faucet — `pg_default_acl` — that is still wide open for functions, tables *and* sequences, from
+both the `postgres` and `supabase_admin` grantors. Every new object starts life granted to `anon`. This is the
+same finding as section 2, arrived at independently, and it is the single most important structural fix in
+`0008`.
+
+**The lockout can be outrun, and cannot be lifted.** Two separate problems:
+
+- *It is a check-then-act race.* `verify_operator` reads `select coalesce(sum(a.fails), 0) …` with a plain
+  read — no `for update`, no advisory lock. A burst of concurrent attempts all read the same pre-threshold
+  count and all proceed to test a PIN. Against a short numeric PIN that materially widens the window. The fix is
+  to make the counter itself the gate — increment first and act on the returned value — rather than reading it
+  and then deciding.
+- *There is no way to unlock.* The only statement that clears `operator_login_attempts` sits inside
+  `verify_operator` and runs **on successful login only** — which is precisely what a locked-out operator
+  cannot do. The window is a rolling five minutes, so it does self-heal once failures stop; the earlier claim
+  that it locks permanently is **wrong** and is not repeated here. The real hazard is operational: a
+  misconfigured tablet retrying a wrong PIN every second holds a booth operator out for as long as it keeps
+  retrying, in the middle of a live event, with no admin override. Phase 0 adds an admin unlock and a
+  queryable "is this operator locked, and until when" so the control room can see and clear it.

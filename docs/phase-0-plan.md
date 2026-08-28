@@ -24,10 +24,10 @@ Eight new numbered migrations, applied through the Supabase MCP. Grouped by what
 
 | Migration | What it does | Kills |
 |---|---|---|
-| `0008_access_hardening` | Revoke the default `anon` grants on new tables and functions; event trigger that force-enables RLS on any new table in `public`; fix `apply_function_grants` to cover procedures; pin-free returns on the four operator functions; `wall_photos` rebuilt without `storage_path`; `thumb_path` required before approval; composite `(id, event_id)` keys so a cross-event row cannot be referenced | 6, 7, part of 5 |
+| `0008_access_hardening` | Revoke the default `anon` grants on new tables, functions and sequences, from both grantors; event trigger that force-enables RLS on any new table in `public` **and rejects a `security definer` function with an unpinned `search_path`**; fix `apply_function_grants` to cover procedures; pin-free returns on the four operator functions; `wall_photos` rebuilt without `storage_path`; `thumb_path` required before approval; composite `(id, event_id)` keys so a cross-event row cannot be referenced | 6, 7, part of 5 |
 | `0009_telemetry_audit_split` | `ops_events` gains a device id, a fingerprint with a unique constraint so repeats collide into a counter instead of accumulating, a per-device cap and a retention window; new append-only `audit_log` for every override, never trimmed | **3**, and the law 3 ÷ feature E conflict |
 | `0010_event_settings` | Per-event branding, AR/EN locale, `draft → live → archived` with transition guards, guest mode, the five control switches (freeze wall, panic brand-only, pause intake, pause AI, banner), USD spend cap plus accumulated spend, allowed-model list, restyle templates and reference images | 5, 8 |
-| `0011_guests_and_limits` | `guest_codes` with long high-entropy codes, `guests` with consent and retention, photo-to-guest grants, downloads, and a general `rate_limits` counter table used by guest lookups and every other limited path | **11**, 12 |
+| `0011_guests_and_limits` | `guest_codes` with long high-entropy codes, `guests` with consent and retention, photo-to-guest grants, downloads, and a general `rate_limits` counter table used by guest lookups and every other limited path. Rewrites the login lockout so the counter *is* the gate rather than a value read then acted on, and adds an admin unlock plus a queryable lock state | **11**, 12, 6 |
 | `0012_capture_and_stations` | Station/device registry with heartbeat and queue depth; `photos` gains device id, client capture time, capture surface and the operator's per-shot restyle/straight-through intent; reject and delete states with reasons; idempotent job enqueue keyed on a client-minted id | 1, 10 |
 | `0013_walls` | Wall/screen registry, per-event layout config, persisted 28-cell placement for the lightbox wall | 5 (F) |
 | `0014_sweepers` | Sweepers for stuck photos, stale stations, old login attempts and telemetry retention; a lease and deadline on AI jobs so a slow worker is never double-charged; every sweep writes a heartbeat **even when it changes nothing** | **10**, 4 |
@@ -69,7 +69,9 @@ approves it → it appears on the wall. One photo's whole journey, end to end.
 - **11** — assert code entropy, then hammer a guest lookup and assert the database-backed limiter blocks it.
 - **12** — assert every counter is a table, not memory.
 - **plus** — assert zero tables in `public` lack RLS and zero carry an `anon` grant, then create a table on the
-  fly to prove the event trigger enforces it.
+  fly to prove the event trigger enforces it; assert every `security definer` function still has a pinned
+  `search_path`, and that an unpinned one is refused; and fire concurrent bad logins to prove the lockout
+  cannot be outrun, then clear it with the admin unlock.
 
 **Also delivered:** the live table list, and a `dist/` build the owner can drag into Cloudflare Pages.
 
