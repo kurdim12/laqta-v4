@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output — the owner's deploy artifact is produced fresh, never committed
+dist/
+dist-ssr/
+build/
+*.local
+
+# Secrets — LAW: .env holds only the public URL + anon key; service-role and provider
+# keys live ONLY in Supabase secrets. Nothing with a credential is ever committed.
+.env
+.env.*
+!.env.example
+
+# Supabase local tooling
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs & test output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+.cache/
