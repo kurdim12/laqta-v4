@@ -11,6 +11,9 @@ export default function Home() {
     { to: session?.kind === "admin" ? "/admin" : "/admin/login", title: t.surfaceAdmin, hint: t.surfaceAdminHint },
     { to: session?.kind === "operator" ? "/booth" : "/operator/login", title: t.surfaceBooth, hint: t.surfaceBoothHint },
     { to: session?.kind === "operator" ? "/queue" : "/operator/login", title: t.surfaceQueue, hint: t.surfaceQueueHint },
+    { to: session?.kind === "operator" ? "/control" : "/operator/login", title: t.surfaceControl, hint: t.surfaceControlHint },
+    { to: session?.kind === "operator" ? "/war" : "/operator/login", title: t.surfaceWar, hint: t.surfaceWarHint },
+    { to: session?.kind === "operator" ? "/kiosk" : "/operator/login", title: t.surfaceKiosk, hint: t.surfaceKioskHint },
     { to: "/guest", title: t.surfaceGuest, hint: t.surfaceGuestHint },
   ];
 

@@ -9,9 +9,11 @@ interface FeedRow {
   id: string;
   status: string;
   approved: boolean;
-  created_at: string;
-  operator_booth?: string | null;
-  source_photo_id?: string | null;
+  createdAt: string;
+  captureSource?: string | null;
+  sourcePhotoId?: string | null;
+  jobStatus?: string | null;
+  thumbUrl?: string | null;
 }
 
 export default function Queue() {
@@ -23,7 +25,7 @@ export default function Queue() {
 
   const refresh = useCallback(async () => {
     try {
-      setRows(await call<FeedRow[]>("booth.feed", { limit: 60 }));
+      setRows(await call<FeedRow[]>("moderation.feed", { limit: 60 }));
       setError(null);
     } catch (err) {
       if (err instanceof ApiError && !err.isOffline) {
@@ -71,16 +73,18 @@ export default function Queue() {
         <div className="tiles">
           {waiting.map((p) => (
             <div className="tile" key={p.id}>
+              {p.thumbUrl ? <img src={p.thumbUrl} alt="" loading="lazy" /> : null}
               <div className="meta">
                 <span className="pill warn">{t.pending}</span>
+                {p.captureSource ? <span className="pill">{p.captureSource}</span> : null}
                 <span className="muted" style={{ fontSize: ".78rem" }}>
-                  {new Date(p.created_at).toLocaleTimeString()}
+                  {new Date(p.createdAt).toLocaleTimeString()}
                 </span>
               </div>
               <div className="actions">
                 <button className="primary" disabled={busy === p.id}
                         onClick={() => act("photo.approve", p.id)}>{t.approve}</button>
-                {p.source_photo_id ? (
+                {p.sourcePhotoId ? (
                   <button disabled={busy === p.id}
                           onClick={() => act("photo.useOriginal", p.id)}>{t.useOriginal}</button>
                 ) : null}
@@ -101,6 +105,7 @@ export default function Queue() {
         <div className="tiles">
           {live.map((p) => (
             <div className="tile" key={p.id}>
+              {p.thumbUrl ? <img src={p.thumbUrl} alt="" loading="lazy" /> : null}
               <div className="meta"><span className="pill ok">{t.approved}</span></div>
               <div className="actions">
                 <button disabled={busy === p.id}

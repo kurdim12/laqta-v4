@@ -9,6 +9,9 @@ import Wall from "./routes/Wall";
 import WallLed from "./routes/WallLed";
 import WallLightbox from "./routes/WallLightbox";
 import Guest from "./routes/Guest";
+import Control from "./routes/Control";
+import War from "./routes/War";
+import Kiosk from "./routes/Kiosk";
 import NotFound from "./routes/NotFound";
 
 /** Role-based routes, one PWA. Each station opens the URL for its job and installs it. */
@@ -25,6 +28,9 @@ export default function App() {
       <Route path="/wall/:slug/led" element={<WallLed />} />
       <Route path="/wall/:slug/lightbox" element={<WallLightbox />} />
       <Route path="/guest" element={<Guest />} />
+      <Route path="/control" element={<Control />} />
+      <Route path="/war" element={<War />} />
+      <Route path="/kiosk" element={<Kiosk />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

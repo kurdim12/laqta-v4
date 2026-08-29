@@ -423,6 +423,33 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     });
   },
 
+  /** What the queue and war room see: the explicit moderation shape from the database, with
+   *  thumbnails and cutouts signed here. Never storage_path — moderation reviews wall
+   *  material at wall size (law 7 holds for staff screens too). */
+  async "moderation.feed"(ctx) {
+    const isAdmin = ctx.session?.kind === "admin";
+    const eventId = isAdmin ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    const rows = await rpc<any[]>("api_moderation_feed", {
+      p_event_id: eventId, p_limit: ctx.body.limit ?? 60,
+    });
+    return await Promise.all((rows ?? []).map(async (r) => ({
+      id: r.id,
+      kind: r.kind,
+      status: r.status,
+      approved: r.approved,
+      createdAt: r.created_at,
+      captureSource: r.capture_source,
+      restyleIntent: r.restyle_intent,
+      sourcePhotoId: r.source_photo_id,
+      operatorBooth: r.operator_booth,
+      jobStatus: r.job_status,
+      jobError: r.job_error,
+      resultPhotoId: r.result_photo_id,
+      thumbUrl: r.thumb_path ? await signedReadUrl(THUMBS, r.thumb_path, 3600) : null,
+      cutoutUrl: r.cutout_path ? await signedReadUrl(THUMBS, r.cutout_path, 3600) : null,
+    })));
+  },
+
   /* ---------------------------------------------------------------- moderation (E) */
 
   async "photo.approve"(ctx) {

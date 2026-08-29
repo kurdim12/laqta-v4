@@ -19,6 +19,10 @@ const registerCalls = [];          // every register attempt, including duplicat
 const uploads = new Map();         // path -> bytes
 const cutouts = new Map();         // photoId -> cutoutPath
 const enqueues = [];               // photoIds whose restyle was queued
+const stations = new Map();        // deviceId -> {kind,label,depth,last}
+const placements = new Map();      // cellIndex -> photoId
+const switches = { wallFrozen: false, panicBrandOnly: false, intakePaused: false, aiPaused: false, bannerActive: false, bannerTextEn: null, bannerTextAr: null };
+const STATION_OFFLINE_MS = 8000;   // mirrors the per-event threshold 0023 defaults to
 let failUntil = 0;                 // simulated server-side outage
 
 // Wall-under-test state, mutated via /__test/wall. The mock mirrors the real semantics the
@@ -74,7 +78,9 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/__test/reset") {
     photos.clear(); registerCalls.length = 0; uploads.clear(); failUntil = 0;
-    cutouts.clear(); enqueues.length = 0;
+    cutouts.clear(); enqueues.length = 0; stations.clear(); placements.clear();
+    Object.assign(switches, { wallFrozen: false, panicBrandOnly: false, intakePaused: false,
+                              aiPaused: false, bannerActive: false, bannerTextEn: null, bannerTextAr: null });
     wall.photoCount = 0; wall.panic = false; wall.frozen = false;
     return json(res, 200, { ok: true });
   }
@@ -83,6 +89,18 @@ const server = createServer(async (req, res) => {
     if (url.searchParams.has("panic")) wall.panic = url.searchParams.get("panic") === "1";
     if (url.searchParams.has("frozen")) wall.frozen = url.searchParams.get("frozen") === "1";
     return json(res, 200, { ok: true, wall });
+  }
+  if (url.pathname === "/__test/seed") {
+    const n = Number(url.searchParams.get("n") || 0);
+    const source = url.searchParams.get("source") || "booth";
+    for (let i = 0; i < n; i++) {
+      const id = `seed-${source}-${i}`;
+      photos.set(id, {
+        id, status: "ready", approved: false, capture_source: source,
+        created_at: new Date(Date.now() - i * 1000).toISOString(),
+      });
+    }
+    return json(res, 200, { ok: true, photos: photos.size });
   }
   if (url.pathname.startsWith("/thumb/")) {
     res.writeHead(200, { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*" });
@@ -156,6 +174,7 @@ const server = createServer(async (req, res) => {
         photos.set(body.photoId, {
           id: body.photoId, status: "processing", approved: false,
           device_id: body.deviceId, restyle_intent: body.restyleIntent,
+          capture_source: body.captureSource ?? "booth",
           client_captured_at: body.clientCapturedAt,
           created_at: new Date().toISOString(),
         });
@@ -172,8 +191,86 @@ const server = createServer(async (req, res) => {
     case "booth.feed":
       return json(res, 200, { ok: true, data: [...photos.values()] });
 
-    case "station.heartbeat":
+    case "station.heartbeat": {
+      stations.set(body.deviceId, {
+        kind: body.kind ?? "booth", label: body.label ?? "",
+        depth: body.queueDepth ?? 0, last: Date.now(),
+      });
       return json(res, 200, { ok: true, data: { queue_depth: body.queueDepth } });
+    }
+
+    case "ops.stations": {
+      const rows = [...stations.entries()].map(([device_id, s]) => ({
+        device_id, kind: s.kind, label: s.label, queue_depth: s.depth, app_version: "mock",
+        seconds_ago: Math.round((Date.now() - s.last) / 1000),
+        online: Date.now() - s.last < STATION_OFFLINE_MS,
+      }));
+      return json(res, 200, { ok: true, data: rows });
+    }
+
+    case "ops.summary":
+      return json(res, 200, {
+        ok: true,
+        data: {
+          event: {
+            id: "ev-1", slug: body.eventSlug, name: "Mock Event",
+            wall_frozen: switches.wallFrozen, panic_brand_only: switches.panicBrandOnly,
+            intake_paused: switches.intakePaused, ai_paused: switches.aiPaused,
+            banner_active: switches.bannerActive,
+            banner_text_en: switches.bannerTextEn, banner_text_ar: switches.bannerTextAr,
+            generations_used: 3, max_generations: 1000,
+            ai_spend_usd: "0.12", ai_budget_usd: "5.00",
+          },
+          remainingBudget: 997, failuresLastHour: 0,
+          telemetry: { rowsThisHour: 2, droppedThisHour: 0, capPerDeviceHour: 50, cappedDevices: 0 },
+          sweepers: [{ sweeper: "sweep_photos", ran_at: new Date().toISOString(), changed: 0 }],
+          jobsByStatus: {}, photosByBooth: [],
+          recentOps: [], recentOverrides: [],
+        },
+      });
+
+    case "ops.health":
+      return json(res, 200, {
+        ok: true,
+        data: { api: true, database: true, storage: true, openrouter: false, anam: false },
+      });
+
+    case "event.switches": {
+      for (const k of ["wallFrozen","panicBrandOnly","intakePaused","aiPaused","bannerActive","bannerTextEn","bannerTextAr"]) {
+        if (body[k] !== undefined && body[k] !== null) switches[k] = body[k];
+      }
+      // the switch state IS the wall state, exactly as it is in the real database
+      wall.panic = switches.panicBrandOnly;
+      wall.frozen = switches.wallFrozen;
+      return json(res, 200, { ok: true, data: { ...switches } });
+    }
+
+    case "moderation.feed": {
+      const rows = [...photos.values()].map((p) => ({
+        id: p.id, kind: "original", status: p.status ?? "ready",
+        approved: Boolean(p.approved), createdAt: p.created_at,
+        captureSource: p.capture_source ?? "booth", restyleIntent: p.restyle_intent ?? "straight",
+        sourcePhotoId: null, operatorBooth: "A", jobStatus: null, jobError: null,
+        resultPhotoId: null,
+        thumbUrl: `http://localhost:${PORT}/thumb/${p.id}`, cutoutUrl: null,
+      }));
+      return json(res, 200, { ok: true, data: rows });
+    }
+
+    case "photo.approve": {
+      const row = photos.get(body.photoId);
+      if (row) row.approved = true;
+      return json(res, 200, { ok: true, data: row ?? null });
+    }
+
+    case "lightbox.place": {
+      if (body.photoId == null) placements.delete(body.cellIndex);
+      else {
+        for (const [cell, pid] of placements) if (pid === body.photoId) placements.delete(cell);
+        placements.set(body.cellIndex, body.photoId);
+      }
+      return json(res, 200, { ok: true, data: { cell_index: body.cellIndex, photo_id: body.photoId } });
+    }
 
     case "event.get":
       return json(res, 200, {
@@ -200,6 +297,14 @@ const server = createServer(async (req, res) => {
 
     case "wall.lightbox": {
       if (wall.panic) return json(res, 200, { ok: true, data: [] });
+      // explicit placements override; otherwise the phase-2 synthetic fill applies
+      if (placements.size > 0) {
+        const cells = [...placements.entries()].map(([cellIndex, pid]) => ({
+          cellIndex, photoId: pid, kind: "original",
+          thumbUrl: `http://localhost:${PORT}/thumb/${pid}`,
+        }));
+        return json(res, 200, { ok: true, data: cells });
+      }
       const cells = Array.from({ length: Math.min(wall.photoCount, 28) }, (_, i) => ({
         cellIndex: i, photoId: `wp-${i}`, kind: "original",
         thumbUrl: `http://localhost:${PORT}/thumb/${i}`,

@@ -132,6 +132,16 @@ async function putAndNotify(item: OutboxItem) {
   notify(await list());
 }
 
+/** Enrichment (cutouts today) runs OFF the photo path, one task at a time. Serial because
+ *  wasm inference thrashes when parallel; detached because a slow cutout must never stand
+ *  between the NEXT photo and the server — law 1 owns the drain loop, decoration does not. */
+let enrichment: Promise<void> = Promise.resolve();
+function afterThePhotoIsSafe(task: () => Promise<void>) {
+  enrichment = enrichment.then(task).catch(() => {
+    /* enrichment failing costs nothing the queue can see */
+  });
+}
+
 async function uploadOne(item: OutboxItem): Promise<void> {
   const target = await call<{
     photoId: string; storagePath: string; thumbPath: string;
@@ -182,15 +192,18 @@ async function uploadOne(item: OutboxItem): Promise<void> {
   if (target.cutoutUploadUrl && target.cutoutPath) {
     // One bounded attempt (law 2's hard timeout lives inside tryCutout). No retry loop: a
     // photo that cannot be cut out is a photo the wall shows as a thumbnail, silently.
-    const cutout = await tryCutout(item.file);
-    if (cutout) {
-      try {
-        await send(target.cutoutUploadUrl, cutout);
-        await call("photo.setCutout", { photoId: item.id, cutoutPath: target.cutoutPath });
-      } catch {
-        /* the cutout is decoration; losing it costs nothing the room can see */
+    // Detached: inference takes seconds per photo, and ten photos taken during an outage
+    // must not confirm ten inferences apart when the network returns.
+    const { cutoutUploadUrl, cutoutPath } = target;
+    const file = item.file;
+    const photoId = item.id;
+    afterThePhotoIsSafe(async () => {
+      const cutout = await tryCutout(file);
+      if (cutout) {
+        await send(cutoutUploadUrl, cutout);
+        await call("photo.setCutout", { photoId, cutoutPath });
       }
-    }
+    });
   }
 }
 

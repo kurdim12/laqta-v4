@@ -316,3 +316,77 @@ in `ops.health`.
 
 Phase 4 — control room and ops: the switches UI (already enforced server-side), live overview
 on the sane telemetry, war-room with remote cell swap, station kill test (offline within 10s).
+
+---
+
+# Phase 4 — Control room & ops · **GATE GREEN (96/96 SQL + 4/4 browser)**
+
+## 1. What was built
+
+**The control room (feature G).** `#/control` polls the live overview every 2 seconds: the
+five per-event switches as press-and-see buttons (freeze wall, panic brand-only, pause
+intake, pause AI, banner with AR+EN text), the stations table with online/offline and each
+device's queue depth, the AI spend meter against its budget, recent failures, the telemetry
+cap's dropped count, sweeper heartbeats, and per-feature configured/missing pills from
+`ops.health` (law 8 — the missing OpenRouter key shows as exactly that).
+
+**The war room (feature G).** `#/war` shows the booth column and kiosk column side by side —
+fed by the new moderation feed, which labels every photo with the surface that took it — a
+28-cell wall mirror, and remote cell swap: tap a photo, tap a cell, and `lightbox.place`
+moves it on the real wall. Approve lives inline, one tap.
+
+**The kiosk (feature C).** `#/kiosk` is the guest-facing self-serve surface: an operator arms
+it, guests get a square framing guide and a shutter, captures auto-crop to square (≤2048px),
+land in the same outbox as the booth (law 1 applies untouched), and register with
+`capture_source='kiosk'` so moderation and the war room can tell the surfaces apart.
+
+**The data layer (migration 0023).** `api_moderation_feed` is an explicit column list —
+thumbnails, cutouts, capture source, intent, latest job state; structurally no
+`storage_path`, no credentials, deleted photos gone. The station offline threshold's default
+dropped 30→8 seconds (still per-event, law 5), so a dead station is visibly dead inside the
+gate's 10-second window.
+
+## 2. The gate, shown passing
+
+**Browser (4/4):** a fake station heartbeating every 2s is killed; the control room reads it
+offline in a wall-clock-measured **≤10 seconds**, with its queue depth still on screen. A
+switch flipped in the control room reaches a wall page that was never told (panic → brand
+only → cleared → photos back). The war room reorders the wall with two taps — photo, cell,
+and the mirror shows it placed. A kiosk shot lands in the approval queue unapproved and
+labelled `kiosk`.
+
+**Deterministic suite (96/96):** the ten new Phase 4 checks — offline threshold inside the
+gate window, beating station online, 9-seconds-silent station offline with depth intact, law
+5 re-proven through every switch at once (other event untouched), the switch flip in the
+audit trail with its actor, the moderation feed's shape (capture source present;
+storage_path and credentials absent from the return type), deleted photos leaving the feed,
+and the ops summary carrying spend, telemetry and sweepers.
+
+## 3. A law-1 regression found by the suite, and the fix
+
+Re-running the Phase 1 gate (law 13's whole point) caught a real one: the post-confirm cutout
+attempt ran INSIDE the drain loop, so ten photos taken dark confirmed one inference apart —
+about 11 seconds each — when the network returned, and a mid-sync restart pushed the tenth
+past the test's window. Enrichment was standing between photos and the server. The fix is
+structural: after confirm (and the idempotent restyle enqueue), the outbox record is deleted
+and the cutout attempt moves to a detached serial background chain. The photo path now owns
+the drain loop alone; the airplane test dropped from 2.6 minutes to 43 seconds with the same
+assertions. This is the ledger's rule restated in code: decoration never blocks the photo
+path.
+
+## 4. Regression line
+
+`run_all_gates()`: **96/96** on the live database. Browser gates re-run after the fix:
+phase 1 (2 passed), phase 2 (3 passed), phase 3 (2 passed), phase 4 (4 passed).
+
+## 5. Debt and owner-hands, recorded
+
+- Unchanged from Phase 3: worker thumbnail resize pass owed before freeze; branding logo
+  upload UI owed before Phase 5 ends; OpenRouter key + Anam keys on the owner's
+  end-of-run checklist.
+
+## 6. Next
+
+Phase 5 — guest modes & delivery: the three per-event guest modes (wall-only ·
+code-per-shot · full registration), gallery by code with downloads, WhatsApp/SMS share.
+Gate: each mode end to end on one event without touching another event's config.
