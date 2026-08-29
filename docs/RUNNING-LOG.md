@@ -113,3 +113,82 @@ dress rehearsal itself.
 
 Phase 1 — the offline engine. Device-first outbox on every capture surface, background sync with
 infinite retry, queue depth surfaced to ops, and the wall's local cache and self-reconcile.
+
+---
+
+# Phase 1 — Offline engine · **GATE GREEN (53/53 + airplane test)**
+
+## 1. What was built
+
+**Device-first capture.** The shutter writes the photo — image bytes included — into IndexedDB
+and returns. Nothing about taking a picture waits on a network, so a shot taken during an outage
+is already safe before the first request is ever attempted. IndexedDB rather than localStorage for
+the reason that decides the whole law: localStorage holds strings, and a queue that cannot hold
+the image itself is not a queue, it is a note saying a photo used to exist.
+
+**Background sync with infinite retry.** A record leaves the device only after the server confirms
+it. Records are leased while sending, and a page that has just loaded reclaims every one of them
+immediately rather than waiting out a lease belonging to a process that no longer exists. Attempts
+are counted to show the operator what is happening, never to decide a photo may be discarded.
+
+**Station heartbeats and queue depth.** Every booth reports how much it is still holding, so ops
+sees a booth falling behind instead of guessing.
+
+**Wall local cache and self-reconcile.** The wall keeps its last good set on disk, shows it after
+a reload during an outage, and reconciles when the network returns.
+
+## 2. The gate test, shown passing
+
+**`npm run gate:phase1:full` — 2 passed (10.2m).** The recorded run spent **10.1 minutes offline**.
+
+| Step | Result |
+|---|---|
+| Ten shots taken with the network cut | **10 on the device, 0 on the server** |
+| Throughout 10.1 minutes offline, re-checked continuously | **the queue never shrank** |
+| Page reloaded mid-outage — a station power-cycled | **still 10, still nothing on the server** |
+| Network restored | **exactly 10 arrived** |
+| Duplicates | **zero** |
+| Device queue afterwards | **empty** |
+| Each photo's shutter time vs arrival time | **shutter time kept** |
+| Restart in the middle of syncing, server failing | every shot **either on the device or on the server — never neither**, then 10/10 with zero duplicates |
+
+**Database half, `run_all_gates()` — 53/53.** One write replayed twenty times makes **one** photo;
+one confirmation replayed five times is harmless; ten distinct shots stay ten. A station reports
+its depth, shows offline within its per-event threshold, keeps its depth readable while offline,
+and updates in place rather than multiplying when it returns.
+
+## 3. Which ledger numbers died
+
+**Law 1 — dead, demonstrated.** Not "we retry" but: the photo is on disk before anything is
+attempted; nothing is deleted until the server has it; a crash mid-send is neither a loss nor a
+duplicate, because every write is keyed on the client-minted id the record has carried since the
+shutter fired; and retry never gives up.
+
+## 4. Regression line
+
+All previous gates re-run: **53/53 green**, plus both browser tests. Nothing skipped or weakened.
+
+## 5. Three real defects this phase caught
+
+Each would have reached the event.
+
+**The PWA could not be deep-linked.** With a relative base, opening `/wall/<slug>` asked the host
+for `/wall/assets/…`, received `index.html`, and the app never booted — and a refresh at `/booth`
+404'd for the same reason. The wall screen would have been dead on arrival. The router is now
+hash-based, so every station opens straight at its own URL on any static host with no rewrite rules.
+
+**The service worker cached the document but not the bundles it references.** A station reloading
+during an outage got a blank page — the precise moment the cache exists for. It now reads the asset
+list out of the shell it is caching.
+
+**A permanent failure looked exactly like a bad network.** A photo the device cannot encode fails
+identically forever, and retrying it silently is how a shot goes missing with nobody noticing.
+Failures the network cannot explain are counted separately and surfaced in the booth. Still never
+discarded — just no longer silent.
+
+## 6. Next
+
+Phase 2 — the three walls: LED backdrop with configurable per-event layout, classic grid, and the
+28-cell lightbox with persisted placement. Gate: each survives a hard refresh and a five-minute
+network cut mid-show and resumes correct state alone, and unpublished photos are provably
+unreachable.
