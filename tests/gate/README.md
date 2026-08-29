@@ -50,3 +50,55 @@ does every minute, so running the gate does nothing to live data that the schedu
 | feature D | The dollar cap refuses the call that would cross it |
 | feature E | The publish gate is enforced by the database against a direct write; approvals are audited; the guest gallery hides unapproved photos |
 | spine | Create event → operator logs in → capture → unapproved is absent from the wall → approve → it appears |
+
+---
+
+## Phase 1 — the airplane test
+
+The database half of Phase 1 lives in `run_all_gates()` like everything else. The **device** half
+cannot: no SQL can prove that a photo survives a browser losing its network, being power-cycled,
+and coming back. That needs a real browser with a real IndexedDB, so it is a Playwright test.
+
+**One line runs it:**
+
+```
+npm run gate:phase1          # short offline window, for the regression suite
+npm run gate:phase1:full     # the contract's ten minutes offline
+```
+
+Both build their own bundle first. That is not tidiness — the first recorded run was silently
+invalidated because `dist` was rebuilt against the production API while the test was reading it
+from disk, so the gate now produces the artifact it tests rather than trusting whatever is there.
+
+### What it does
+
+1. Signs in and waits for the service worker to actually **control** the page — not merely be
+   registered, because until it is, a reload still needs the network and the test would be
+   measuring the wrong thing.
+2. **Cuts the network** at the browser level.
+3. Takes **ten shots in the dark**, and asserts all ten are on the device and none on the server.
+4. Waits out the offline window, re-checking continuously that **the queue never shrinks**.
+5. **Reloads the page mid-outage** — a station being power-cycled — and asserts nothing was lost.
+6. Restores the network and asserts **exactly ten arrive, with zero duplicates**, the device queue
+   drains to empty, and each photo kept the time its shutter fired rather than the time it landed.
+
+A second test restarts the page **in the middle of syncing**, while the server is failing, and
+asserts the invariant that matters: every shot is either still on the device or already on the
+server — never neither.
+
+### Why there is a mock server
+
+This build session's network policy blocks the project's own domain, so the browser under test
+cannot reach the real Edge Function. `mock-api.mjs` implements the same contract and nothing more
+forgiving — registering a photo id that already exists is accepted and changes nothing, exactly as
+`on conflict (id) do nothing` behaves in Postgres.
+
+The split is deliberate and each half is proved where it lives:
+
+- **The device half** — survives an outage, a restart, a retry; arrives exactly once — is proved
+  here, in a browser, against a network that really goes away.
+- **The server half** — that a replayed write cannot become a second photo — is proved by
+  `gate_phase_1()` against the **real database**, which replays one write twenty times and one
+  confirmation five times and asserts a single photo.
+
+Neither half is asserted from the other's behaviour.

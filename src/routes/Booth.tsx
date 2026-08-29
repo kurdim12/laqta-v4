@@ -4,7 +4,8 @@ import { Shell } from "../components/Shell";
 import { useI18n } from "../i18n";
 import { ApiError, call, messageFor } from "../api/client";
 import { useSession } from "../state/useSession";
-import { deviceId, sendCapture } from "../api/photo";
+import { deviceId } from "../api/photo";
+import { enqueue, kick, list, needsAttention, startSync, subscribe, type OutboxItem } from "../offline/outbox";
 
 interface FeedRow {
   id: string;
@@ -14,17 +15,25 @@ interface FeedRow {
   job_status?: string | null;
 }
 
-type ShotState = "sending" | "sent" | "failed";
-interface Shot { id: string; state: ShotState; error?: string }
-
 export default function Booth() {
   const { t } = useI18n();
   const { session } = useSession();
-  const [shots, setShots] = useState<Shot[]>([]);
+  const [queue, setQueue] = useState<OutboxItem[]>([]);
   const [feed, setFeed] = useState<FeedRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [restyle, setRestyle] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const queueRef = useRef<OutboxItem[]>([]);
+  queueRef.current = queue;
+
+  // The sync loop runs for the life of this page, and the queue view is driven by the outbox
+  // itself rather than by component state — so a reload shows exactly what is still on disk.
+  useEffect(() => {
+    const stopSync = startSync();
+    const unsubscribe = subscribe(setQueue);
+    void list().then(setQueue);
+    return () => { stopSync(); unsubscribe(); };
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -32,7 +41,7 @@ export default function Booth() {
       setError(null);
     } catch (err) {
       // A feed that cannot refresh is a display problem, never a capture problem. The booth
-      // stays usable so the queue on this device keeps draining.
+      // stays fully usable so the queue on this device keeps draining.
       if (err instanceof ApiError && !err.isOffline) {
         setError(messageFor(err.code, t as unknown as Record<string, string>));
       }
@@ -44,56 +53,46 @@ export default function Booth() {
     void refresh();
     const feedTimer = setInterval(() => void refresh(), 5000);
 
-    // The heartbeat is what lets ops see this booth as online, with the depth of whatever it
-    // is still holding locally.
-    const beat = () =>
+    const beat = () => {
+      const depth = queueRef.current.filter((i) => i.state !== "done").length;
       call("station.heartbeat", {
         deviceId: deviceId(), kind: "booth", label: session.booth ?? "",
-        queueDepth: shotsInFlight(), appVersion: "phase-0",
+        queueDepth: depth, appVersion: "phase-1",
       }).catch(() => { /* a missed heartbeat is not worth interrupting a shoot for */ });
+    };
     beat();
     const beatTimer = setInterval(beat, 10000);
 
-    return () => {
-      clearInterval(feedTimer);
-      clearInterval(beatTimer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { clearInterval(feedTimer); clearInterval(beatTimer); };
   }, [session, refresh]);
-
-  const shotsRef = useRef<Shot[]>([]);
-  shotsRef.current = shots;
-  function shotsInFlight(): number {
-    return shotsRef.current.filter((s) => s.state === "sending" || s.state === "failed").length;
-  }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file) return;
+    if (!file || !session?.eventId) return;
 
-    // The id is minted here, on the device, before anything is sent. Every later step keys on
-    // it, so a retry after an outage converges on one photo instead of two.
-    const photoId = crypto.randomUUID();
-    const pending: Shot = { id: photoId, state: "sending" };
-    setShots((s) => [pending, ...s].slice(0, 12));
-
+    // The id is minted here, at the shutter, before anything is attempted. The photo is on
+    // disk before the first request is ever tried, so an outage cannot cost us this shot.
     try {
-      await sendCapture({
-        photoId, file, restyle, deviceId: deviceId(),
-        capturedAt: Date.now(), source: "booth",
+      await enqueue({
+        id: crypto.randomUUID(),
+        eventId: session.eventId,
+        file,
+        restyle,
+        source: "booth",
+        deviceId: deviceId(),
       });
-      setShots((s) => s.map((x) => (x.id === photoId ? { ...x, state: "sent" } : x)));
-      void refresh();
-    } catch (err) {
-      const code = err instanceof ApiError ? err.code : "somethingWentWrong";
-      setShots((s) => s.map((x) => (x.id === photoId ? { ...x, state: "failed", error: code } : x)));
-      setError(messageFor(code, t as unknown as Record<string, string>));
+      setError(null);
+    } catch {
+      setError(t.somethingWentWrong);
     }
   }
 
   if (!session) return <Navigate to="/operator/login" replace />;
   if (session.kind !== "operator") return <Navigate to="/" replace />;
+
+  const waiting = queue.filter((i) => i.state !== "done");
+  const stuck = needsAttention(queue);
 
   return (
     <Shell title={t.boothTitle}>
@@ -111,18 +110,33 @@ export default function Booth() {
                  onChange={(e) => setRestyle(e.target.checked)} />
           <span style={{ margin: 0 }}>{restyle ? t.restyle : t.straightThrough}</span>
         </label>
+        {waiting.length > 0 ? (
+          <button className="ghost" onClick={() => void kick()}>
+            {t.retry} ({waiting.length})
+          </button>
+        ) : null}
       </div>
       <input ref={fileRef} type="file" accept="image/*" capture="environment"
              onChange={onFile} style={{ display: "none" }} />
 
-      {shots.length ? (
+      {stuck.length > 0 ? (
+        <div className="notice warn">
+          {t.failed} · {stuck.length} — {stuck[0].lastError}
+        </div>
+      ) : null}
+
+      {waiting.length > 0 ? (
         <>
-          <h2>{t.sending}</h2>
+          <h2>{t.queued} · {waiting.length}</h2>
+          <p className="muted" style={{ fontSize: ".85rem", marginBlockStart: -6 }}>
+            {t.connectionLost}
+          </p>
           <div className="row">
-            {shots.map((s) => (
-              <span key={s.id}
-                    className={`pill ${s.state === "sent" ? "ok" : s.state === "failed" ? "bad" : "warn"}`}>
-                {s.state === "sent" ? t.sent : s.state === "failed" ? t.failed : t.sending}
+            {waiting.map((i) => (
+              <span key={i.id}
+                    className={`pill ${(i.hardFailures ?? 0) >= 3 ? "bad" : i.state === "sending" ? "warn" : ""}`}>
+                {(i.hardFailures ?? 0) >= 3 ? t.failed : i.state === "sending" ? t.sending : t.queued}
+                {i.attempts > 0 ? ` · ${i.attempts}` : ""}
               </span>
             ))}
           </div>

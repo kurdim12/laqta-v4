@@ -29,7 +29,7 @@ export default function Home() {
       </div>
       <div className="spacer" />
       <p className="muted" style={{ fontSize: ".85rem" }}>
-        {t.surfaceWall}: /wall/&lt;{t.eventSlug.toLowerCase()}&gt;
+        {t.surfaceWall}: #/wall/&lt;{t.eventSlug.toLowerCase()}&gt;
       </p>
     </Shell>
   );

@@ -133,7 +133,7 @@ export default function Admin() {
         <>
           <h2>{t.switches} — {event.name}</h2>
           <p className="muted" style={{ fontSize: ".85rem", marginBlockStart: -4 }}>
-            {t.surfaceWall}: /wall/{event.slug} · {event.generations_used}/{event.max_generations} ·
+            {t.surfaceWall}: #/wall/{event.slug} · {event.generations_used}/{event.max_generations} ·
             ${Number(event.ai_spend_usd).toFixed(2)}
             {event.ai_budget_usd ? ` / $${Number(event.ai_budget_usd).toFixed(2)}` : ""}
           </p>

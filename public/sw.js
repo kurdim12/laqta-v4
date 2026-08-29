@@ -9,12 +9,34 @@
 
 const SHELL = "laqta-shell-v1";
 
+// The shell is not just index.html: it is index.html AND the hashed bundles it references.
+// Caching only the document leaves a station that reloads during an outage staring at a blank
+// page while the browser fails to fetch a script. The asset names change every build, so they
+// are read out of the document rather than hardcoded or injected by a build step.
+async function precacheShell() {
+  const cache = await caches.open(SHELL);
+  await cache.addAll(["./", "./index.html", "./manifest.webmanifest"]);
+
+  try {
+    const res = await fetch("./index.html", { cache: "reload" });
+    const html = await res.text();
+    const refs = new Set();
+    const re = /(?:src|href)\s*=\s*["']([^"']+)["']/g;
+    let m;
+    while ((m = re.exec(html))) {
+      const url = m[1];
+      if (url.startsWith("http") || url.startsWith("//") || url.startsWith("data:")) continue;
+      refs.add(new URL(url, self.registration.scope).href);
+    }
+    await Promise.all([...refs].map((u) => cache.add(u).catch(() => {})));
+  } catch (_) {
+    // A shell that could not be fully precached still opens; it just may need the network for
+    // an asset. Failing installation outright would be worse.
+  }
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(SHELL).then((cache) => cache.addAll(["./", "./index.html", "./manifest.webmanifest"]))
-      .then(() => self.skipWaiting())
-      .catch(() => self.skipWaiting()),
-  );
+  event.waitUntil(precacheShell().then(() => self.skipWaiting()).catch(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {

@@ -3,12 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "LAQTA v3 — the live-event photo platform of MaraNasi",
+  "description": "LAQTA v3 \u2014 the live-event photo platform of MaraNasi",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false --pretty"
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false --pretty",
+    "build:test": "VITE_API_URL=http://localhost:8787/api vite build",
+    "gate:phase1": "npm run build:test && playwright test tests/gate/phase-1",
+    "gate:phase1:full": "npm run build:test && LAQTA_OFFLINE_MINUTES=10 playwright test tests/gate/phase-1"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -16,6 +19,7 @@
     "react-router-dom": "^6.26.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.2",

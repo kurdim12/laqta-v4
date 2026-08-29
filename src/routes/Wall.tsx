@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useI18n, pick } from "../i18n";
 import { ApiError, call } from "../api/client";
+import { cacheGet, cacheSet } from "../offline/outbox";
 
 interface WallPhoto { id: string; kind: string; createdAt: string; thumbUrl: string | null }
 interface EventRow {
@@ -35,6 +36,7 @@ export default function Wall() {
       ]);
       lastGood.current = rows ?? [];
       setPhotos(lastGood.current);
+      void cacheSet(`wall:${slug}`, lastGood.current);
       if (ev) setEvent(ev);
       setStale(false);
     } catch (err) {
@@ -42,6 +44,22 @@ export default function Wall() {
       if (err instanceof ApiError) setStale(true);
       setPhotos(lastGood.current);
     }
+  }, [slug]);
+
+  // A wall that is refreshed or power-cycled during an outage must come back showing the wall,
+  // not an empty screen. The last good set is on disk, so it survives the reload that a cut
+  // power supply forces.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const cached = await cacheGet<WallPhoto[]>(`wall:${slug}`);
+      if (!cancelled && cached && cached.length && lastGood.current.length === 0) {
+        lastGood.current = cached;
+        setPhotos(cached);
+        setStale(true);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [slug]);
 
   useEffect(() => {
