@@ -251,8 +251,20 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     return await rpc("api_list_events");
   },
 
+  /** Public: what a wall or guest surface may know. Calls api_event_public, whose return
+   *  type structurally cannot name the AI prompt, budgets or spend. */
   async "event.get"({ body }) {
-    return one(await rpc("api_event_by_slug", { p_slug: body.slug }));
+    return one(await rpc("api_event_public", { p_event_slug: body.slug }));
+  },
+
+  /** Admin only: the LED/lightbox layout, a per-event setting like every other (law 5). */
+  async "event.wallLayout"(ctx) {
+    requireAdmin(ctx);
+    return one(await rpc("api_update_event", {
+      p_slug: ctx.body.slug, p_name: null, p_ai_prompt: null, p_ai_model: null,
+      p_max_generations: null, p_status: null,
+      p_wall_config: ctx.body.wallConfig ?? {},
+    }));
   },
 
   async "event.branding"(ctx) {
@@ -408,6 +420,32 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       createdAt: r.created_at,
       thumbUrl: r.thumb_path ? await signedReadUrl(THUMBS, r.thumb_path, 3600) : null,
     })));
+  },
+
+  /** Public, like wall.photos: one tick of the 28-cell lightbox. The database heals dead
+   *  placements, autofills unless frozen, and returns nothing under panic; this layer only
+   *  signs the thumbnails. */
+  async "wall.lightbox"({ body }) {
+    const rows = await rpc<any[]>("wall_lightbox", { p_event_slug: body.eventSlug });
+    return await Promise.all((rows ?? []).map(async (r) => ({
+      cellIndex: r.cell_index,
+      photoId: r.photo_id,
+      kind: r.kind,
+      thumbUrl: r.thumb_path ? await signedReadUrl(THUMBS, r.thumb_path, 3600) : null,
+    })));
+  },
+
+  /** An operator or admin pins a photo to a cell, or clears one. Audited in the database. */
+  async "lightbox.place"(ctx) {
+    const isAdmin = ctx.session?.kind === "admin";
+    const eventId = isAdmin ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return one(await rpc("api_lightbox_place", {
+      p_event_id: eventId,
+      p_cell_index: ctx.body.cellIndex,
+      p_photo_id: ctx.body.photoId ?? null,
+      p_operator_id: isAdmin ? null : ctx.session!.id,
+      p_admin_id: isAdmin ? ctx.session!.id : null,
+    }));
   },
 
   /* --------------------------------------------------------------------- guests (H, 11) */

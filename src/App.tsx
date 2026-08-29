@@ -6,6 +6,8 @@ import OperatorLogin from "./routes/OperatorLogin";
 import Booth from "./routes/Booth";
 import Queue from "./routes/Queue";
 import Wall from "./routes/Wall";
+import WallLed from "./routes/WallLed";
+import WallLightbox from "./routes/WallLightbox";
 import Guest from "./routes/Guest";
 import NotFound from "./routes/NotFound";
 
@@ -20,6 +22,8 @@ export default function App() {
       <Route path="/booth" element={<Booth />} />
       <Route path="/queue" element={<Queue />} />
       <Route path="/wall/:slug" element={<Wall />} />
+      <Route path="/wall/:slug/led" element={<WallLed />} />
+      <Route path="/wall/:slug/lightbox" element={<WallLightbox />} />
       <Route path="/guest" element={<Guest />} />
       <Route path="*" element={<NotFound />} />
     </Routes>

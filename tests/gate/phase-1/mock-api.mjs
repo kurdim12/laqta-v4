@@ -19,6 +19,18 @@ const registerCalls = [];          // every register attempt, including duplicat
 const uploads = new Map();         // path -> bytes
 let failUntil = 0;                 // simulated server-side outage
 
+// Wall-under-test state, mutated via /__test/wall. The mock mirrors the real semantics the
+// walls are built against: panic returns nothing, freeze only stops NEW content, and the
+// lightbox is a persistent placement keyed by cell index.
+import { readFileSync } from "node:fs";
+const FIXTURE = readFileSync(new URL("./fixture.png", import.meta.url));
+const wall = {
+  photoCount: 0,
+  panic: false,
+  frozen: false,
+  config: { led: { columns: 2, rows: 2, cycleSeconds: 2, brandPattern: "none" } },
+};
+
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -57,7 +69,18 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/__test/reset") {
     photos.clear(); registerCalls.length = 0; uploads.clear(); failUntil = 0;
+    wall.photoCount = 0; wall.panic = false; wall.frozen = false;
     return json(res, 200, { ok: true });
+  }
+  if (url.pathname === "/__test/wall") {
+    if (url.searchParams.has("photos")) wall.photoCount = Number(url.searchParams.get("photos"));
+    if (url.searchParams.has("panic")) wall.panic = url.searchParams.get("panic") === "1";
+    if (url.searchParams.has("frozen")) wall.frozen = url.searchParams.get("frozen") === "1";
+    return json(res, 200, { ok: true, wall });
+  }
+  if (url.pathname.startsWith("/thumb/")) {
+    res.writeHead(200, { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*" });
+    return res.end(FIXTURE);
   }
 
   // Signed upload targets.
@@ -130,6 +153,38 @@ const server = createServer(async (req, res) => {
 
     case "station.heartbeat":
       return json(res, 200, { ok: true, data: { queue_depth: body.queueDepth } });
+
+    case "event.get":
+      return json(res, 200, {
+        ok: true,
+        data: {
+          slug: body.slug, name: "Mock Event", name_ar: "\u062a\u062c\u0631\u0628\u0629", name_en: "Mock Event",
+          status: "live", locale_default: "ar", locales: ["ar", "en"],
+          brand_primary: "#e8c07a", brand_secondary: "#111111", brand_font_family: null,
+          wall_frozen: wall.frozen, panic_brand_only: wall.panic,
+          banner_active: false, banner_text_en: null, banner_text_ar: null,
+          guest_mode: "wall_only", wall_config: wall.config,
+        },
+      });
+
+    case "wall.photos": {
+      if (wall.panic) return json(res, 200, { ok: true, data: [] });
+      const rows = Array.from({ length: wall.photoCount }, (_, i) => ({
+        id: `wp-${i}`, kind: "original",
+        createdAt: new Date(Date.now() - i * 1000).toISOString(),
+        thumbUrl: `http://localhost:${PORT}/thumb/${i}`,
+      }));
+      return json(res, 200, { ok: true, data: rows });
+    }
+
+    case "wall.lightbox": {
+      if (wall.panic) return json(res, 200, { ok: true, data: [] });
+      const cells = Array.from({ length: Math.min(wall.photoCount, 28) }, (_, i) => ({
+        cellIndex: i, photoId: `wp-${i}`, kind: "original",
+        thumbUrl: `http://localhost:${PORT}/thumb/${i}`,
+      }));
+      return json(res, 200, { ok: true, data: cells });
+    }
 
     default:
       return json(res, 404, { ok: false, error: "UNKNOWN_ACTION" });

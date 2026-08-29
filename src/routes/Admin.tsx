@@ -12,6 +12,7 @@ interface EventRow {
   guest_mode: string; locale_default: string;
   ai_budget_usd: string | null; ai_spend_usd: string;
   max_generations: number; generations_used: number;
+  wall_config: { led?: { columns?: number; rows?: number; cycleSeconds?: number; brandPattern?: string } } | null;
 }
 interface OperatorRow {
   id: string; username: string; display_name: string; booth: string; role: string; active: boolean;
@@ -42,6 +43,10 @@ export default function Admin() {
   const [opBooth, setOpBooth] = useState("A");
   const [opRole, setOpRole] = useState("operator");
   const [opPin, setOpPin] = useState("");
+  const [ledCols, setLedCols] = useState(6);
+  const [ledRows, setLedRows] = useState(3);
+  const [ledCycle, setLedCycle] = useState(8);
+  const [ledPattern, setLedPattern] = useState("corners");
 
   const event = events.find((e) => e.id === selected) ?? null;
 
@@ -66,6 +71,15 @@ export default function Admin() {
 
   useEffect(() => { void loadEvents(); }, [loadEvents]);
   useEffect(() => { if (selected) void loadOperators(selected); }, [selected, loadOperators]);
+
+  // The layout form always shows what the event actually has, not what was last typed.
+  useEffect(() => {
+    const led = events.find((e) => e.id === selected)?.wall_config?.led;
+    setLedCols(Number(led?.columns) || 6);
+    setLedRows(Number(led?.rows) || 3);
+    setLedCycle(Number(led?.cycleSeconds) || 8);
+    setLedPattern(typeof led?.brandPattern === "string" ? led.brandPattern : "corners");
+  }, [selected, events]);
 
   async function run(fn: () => Promise<unknown>, okMessage?: string) {
     setBusy(true); setError(null); setOk(null);
@@ -133,7 +147,8 @@ export default function Admin() {
         <>
           <h2>{t.switches} — {event.name}</h2>
           <p className="muted" style={{ fontSize: ".85rem", marginBlockStart: -4 }}>
-            {t.surfaceWall}: #/wall/{event.slug} · {event.generations_used}/{event.max_generations} ·
+            {t.wallGrid}: #/wall/{event.slug} · {t.wallLed}: #/wall/{event.slug}/led ·{" "}
+            {t.wallLightbox}: #/wall/{event.slug}/lightbox · {event.generations_used}/{event.max_generations} ·
             ${Number(event.ai_spend_usd).toFixed(2)}
             {event.ai_budget_usd ? ` / $${Number(event.ai_budget_usd).toFixed(2)}` : ""}
           </p>
@@ -154,6 +169,51 @@ export default function Admin() {
               );
             })}
           </div>
+
+          <h2>{t.wallLayout}</h2>
+          <form
+            className="row"
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              void run(
+                () => call("event.wallLayout", {
+                  slug: event.slug,
+                  wallConfig: {
+                    ...(event.wall_config ?? {}),
+                    led: { columns: ledCols, rows: ledRows, cycleSeconds: ledCycle, brandPattern: ledPattern },
+                  },
+                }),
+                t.saved,
+              );
+            }}
+          >
+            <label style={{ margin: 0 }}>
+              <span>{t.layoutColumns}</span>
+              <input style={{ maxWidth: 90 }} type="number" min={2} max={12} value={ledCols}
+                     onChange={(e) => setLedCols(Number(e.target.value))} />
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.layoutRows}</span>
+              <input style={{ maxWidth: 90 }} type="number" min={1} max={8} value={ledRows}
+                     onChange={(e) => setLedRows(Number(e.target.value))} />
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.layoutCycle}</span>
+              <input style={{ maxWidth: 100 }} type="number" min={2} max={120} value={ledCycle}
+                     onChange={(e) => setLedCycle(Number(e.target.value))} />
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.layoutBrandPattern}</span>
+              <select style={{ maxWidth: 150 }} value={ledPattern}
+                      onChange={(e) => setLedPattern(e.target.value)}>
+                <option value="none">{t.patternNone}</option>
+                <option value="corners">{t.patternCorners}</option>
+                <option value="row">{t.patternRow}</option>
+              </select>
+            </label>
+            <button className="primary" type="submit" disabled={busy}
+                    style={{ alignSelf: "end" }}>{t.save}</button>
+          </form>
 
           <h2>{t.operators}</h2>
           <table>
