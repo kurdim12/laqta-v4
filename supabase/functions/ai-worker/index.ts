@@ -26,6 +26,10 @@
 // This function is poked, never called by users. It authenticates the poke against a token
 // that lives only in the database, readable only with the service key this process holds.
 
+// `decode` sniffs the format; a model may hand back PNG or JPEG and the thumbnail must not
+// depend on which. `Image` is used to build the probe's own source image.
+import { decode, Image } from "https://deno.land/x/imagescript@1.3.0/mod.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPENROUTER_KEY = Deno.env.get("OPENROUTER_API_KEY") ?? "";
@@ -34,6 +38,7 @@ const ORIGINALS = "photos";
 const THUMBS = "thumbs";
 const MAX_JOBS_PER_POKE = 4;
 const HEARTBEAT_MS = 30_000;
+const THUMB_EDGE = 512;
 
 const WORKER_ID = `edge-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -96,6 +101,25 @@ async function storageUpload(bucket: string, path: string, bytes: Uint8Array, co
     body: bytes as unknown as BodyInit,
   });
   if (!res.ok) throw new Error(`UPLOAD_${res.status}`);
+}
+
+/* ---------------------------------------------------------------- thumbnails (law 7)
+ * A generated image comes back at model resolution. Storing those same bytes in the thumbs
+ * bucket would put a full-size image in front of every wall — the exact egress failure law 7
+ * exists to kill — so the worker makes its own thumbnail, the way the browser does at
+ * capture. A failure here costs quality, never the photo: the original bytes stand in, and
+ * the shot still publishes.
+ */
+
+async function makeThumb(bytes: Uint8Array, edge = THUMB_EDGE): Promise<Uint8Array> {
+  const decoded = await decode(bytes);
+  if (!(decoded instanceof Image)) throw new Error("NOT_A_STILL_IMAGE");
+  const image = decoded;
+  const side = Math.min(image.width, image.height);
+  const cropped = image.crop(
+    Math.floor((image.width - side) / 2), Math.floor((image.height - side) / 2), side, side,
+  );
+  return await cropped.resize(edge, edge).encodeJPEG(82);
 }
 
 /* ------------------------------------------------------------------- generation */
@@ -212,10 +236,11 @@ async function processOneJob(eventId: string): Promise<boolean> {
 
     const resultId = crypto.randomUUID();
     const base = `${eventId}/${resultId}.jpg`;
-    // A generated image is already display-sized, so the same bytes serve as their own
-    // thumbnail for now; a resize pass is queued in the log as debt, not forgotten.
+    // The original at model resolution; the thumbnail at wall size. Law 7 holds for generated
+    // photos exactly as it does for captured ones.
+    const thumb = await makeThumb(out.bytes).catch(() => out.bytes);
     await storageUpload(ORIGINALS, base, out.bytes, "image/png");
-    await storageUpload(THUMBS, base, out.bytes, "image/png");
+    await storageUpload(THUMBS, base, thumb, thumb === out.bytes ? "image/png" : "image/jpeg");
 
     await rpc("api_insert_generated_photo", {
       p_photo_id: resultId, p_event_id: eventId, p_operator_id: job.operator_id,
@@ -296,6 +321,36 @@ Deno.serve(async (req) => {
     else await work;
     return new Response(JSON.stringify({ ok: true, probing: seconds }), {
       status: 202, headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  if (body.mode === "thumb-probe") {
+    // The recorded proof that a generated image is shrunk before it can reach a wall (law 7).
+    // A noisy 1600×1600 source is built here rather than fetched: noise barely compresses, so
+    // the ratio measured is the resize doing the work, not the encoder finding flat colour.
+    const source = new Image(1600, 1600);
+    for (let x = 1; x <= 1600; x++) {
+      for (let y = 1; y <= 1600; y++) {
+        source.setPixelAt(x, y, Image.rgbaToColor(
+          (x * 7 + y * 13) % 256, (x * 3 + y * 29) % 256, (x * 17 + y * 5) % 256, 255,
+        ));
+      }
+    }
+    const sourceBytes = await source.encode();
+    const t0 = Date.now();
+    const thumbBytes = await makeThumb(sourceBytes);
+    const back = await decode(thumbBytes);
+    const decoded = back as Image;
+    await tableInsert("sweeper_runs", {
+      sweeper: "ai_worker_thumb_probe", changed: thumbBytes.length,
+      detail: {
+        sourceBytes: sourceBytes.length, thumbBytes: thumbBytes.length,
+        thumbWidth: decoded.width, thumbHeight: decoded.height,
+        elapsedMs: Date.now() - t0, worker: WORKER_ID,
+      },
+    });
+    return new Response(JSON.stringify({ ok: true, thumbBytes: thumbBytes.length }), {
+      status: 200, headers: { "Content-Type": "application/json" },
     });
   }
 

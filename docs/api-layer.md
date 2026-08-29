@@ -46,8 +46,25 @@ spends them. No key is logged, returned, or written to this repository.
 
 ## Verification status — stated honestly
 
-The function is deployed and ACTIVE, and every database function it calls is covered by the 39-check Phase 0
-gate. **It has not been exercised over HTTP from the build session**: this environment's egress policy blocks
-`bdzdvlnmocojsifdkpvd.supabase.co`, and the correct response to a policy denial is to report it rather than
-route around it. Confirming the HTTP surface end to end is the first task of the next phase of work, alongside
-the PWA that calls it.
+The function is deployed and ACTIVE (version 8 at the freeze), and every database function it calls is covered
+by the gate suite. **It still has not been exercised over HTTP from the build session's own container**: this
+environment's egress policy blocks `bdzdvlnmocojsifdkpvd.supabase.co`, and the correct response to a policy
+denial is to report it rather than route around it.
+
+It has, however, been exercised over real HTTP from inside the database, which is the same production path
+without the blocked hop: `net.http_post` calls against the live function proved `guest.register` answering
+`mode_refused` on a wall-only event, and the AI worker's poke, probe and refund path end to end. The browser
+half of every gate drives the real pages against a stand-in that mirrors this contract action for action.
+
+## Actions added after Phase 0
+
+| Phase | Actions |
+|---|---|
+| 2 | `event.get` (public event shape), `event.wallLayout`, `wall.lightbox`, `lightbox.place` |
+| 3 | `event.ai`, `photo.enqueue`, `photo.setCutout` |
+| 4 | `moderation.feed`, `ops.stations`, `ops.summary`, `ops.health`, `station.heartbeat` |
+| 5 | `photo.mintCode`, `guest.register`, `event.status`, `event.brandingUploadUrl` |
+| 6 | `event.shirts`, `cue.list/save/status/delete`, `task.list/save/status/delete`, `avatar.session` |
+
+Every one is a named function in the same action table, reached through the same single entry point. There is
+still exactly one API layer — that is the whole of ledger #9, and it survived six phases of features.

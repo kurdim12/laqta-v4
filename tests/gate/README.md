@@ -102,3 +102,36 @@ The split is deliberate and each half is proved where it lives:
   confirmation five times and asserts a single photo.
 
 Neither half is asserted from the other's behaviour.
+
+---
+
+## Phases 2 through 7 — how the suite grew
+
+Every phase added checks in a new migration and, where a browser was the only honest witness, a
+new Playwright spec. Nothing was ever edited; the suite only grows, and every migration since
+0009 runs it before it finishes — so a change that breaks a law rolls back whole rather than
+landing half-applied.
+
+```
+npm run gate:all          # every browser gate, phases 1 through 7
+npm run gate:phase7:full  # the rehearsal with the contract's full ten-minute outage
+```
+
+```sql
+select * from run_all_gates() where not pass;   -- expect zero rows
+```
+
+| Phase | SQL half | Browser half |
+|---|---|---|
+| 2 — walls | Wall types cannot name originals; the lightbox heals dead cells, autofills unless frozen, shows nothing under panic | Three wall types survive a hard refresh and a five-minute cut mid-show and resume correct state alone |
+| 3 — AI | A 95-second run recorded on the production runtime; enqueue is idempotent; the cap refuses before spend; settlement swaps estimate for reality | A real cutout produced from the shipped model with **zero requests leaving our origin**; with the model deliberately dead, silent fallback to the original |
+| 4 — control room | The offline threshold is inside the ten-second window; a nine-seconds-silent station reads offline with its depth intact; switches are audited with their actor | A killed station reads offline within a wall-clock-measured ten seconds; a switch reaches a wall that was never told; the war room reorders the wall with two taps |
+| 5 — guest modes | Modes are enforced in the mint itself; one shot, one code; registration is charged before it writes; a guest cannot be bound to another event's photo | Each mode's whole journey, end to end, on one event — and three modes side by side with zero leakage |
+| 6 — revived five | A picker shot is an ordinary unapproved photo carrying its choice, which a replay cannot rewrite; cues and tasks are event-scoped and flow through the capped telemetry | The choice reaches the queue; the avatar ladder reads honestly and climbs when the key appears; cues and tasks are worked; vogue is a style of the same wall |
+| 7 — rehearsal | A recorded production probe proving a generated image is shrunk to 512px before it can reach a wall | **The dress rehearsal**: a show that starts, has its internet pulled mid-run, keeps working dark, tells the truth in ops, loses nothing, takes a logged override, and recovers alone |
+
+### The rehearsal is the one the owner also runs
+
+`gate:phase7:full` is the same run the contract describes, automated so it can be repeated
+before every later change. It does not replace the owner pulling the plug in the venue on real
+hardware — that is the human step, and it is the last one before the freeze.
