@@ -53,13 +53,23 @@ async function outboxDepth(page: Page): Promise<number> {
   });
 }
 
-async function signIn(page: Page) {
+/** Signs a page in and waits for the session to actually exist before anything else uses it.
+ *  Landing on /#/booth is that proof: every station route redirects to the login page while
+ *  there is no session, so navigating straight to /#/control after clicking "sign in" is a
+ *  race — and one that this gate lost once, hanging twenty minutes on a control room that had
+ *  quietly bounced back to the login screen. */
+async function signInOnly(page: Page) {
   await page.goto("/#/operator/login");
   await page.getByPlaceholder("lynk-and-co").fill("rehearsal");
   await page.locator('input[autocomplete="username"]').fill("booth1");
   await page.locator('input[autocomplete="current-password"]').fill("2468");
   await page.getByRole("button", { name: /sign in|دخول/i }).click();
-  await expect(page).toHaveURL(/#\/booth/, { timeout: 20_000 });
+  await expect(page, "the session exists before anything navigates away")
+    .toHaveURL(/#\/booth/, { timeout: 20_000 });
+}
+
+async function signIn(page: Page) {
+  await signInOnly(page);
   await page.reload();
   await page.waitForFunction(
     () => navigator.serviceWorker && navigator.serviceWorker.controller !== null,
@@ -85,17 +95,20 @@ test("the dress rehearsal: a show that survives its internet dying mid-run",
 
     await signIn(page);
 
-    // The control room has the show on the board before anything else happens.
+    // The control room has the show on the board before anything else happens. It gets its own
+    // browser context deliberately: when the venue's internet dies below, the booth goes dark
+    // and the control room does not — which is exactly the arrangement on a real event night,
+    // where ops runs off a phone hotspot.
     const control = await browser.newPage();
-    await control.goto("/#/operator/login");
-    await control.getByPlaceholder("lynk-and-co").fill("rehearsal");
-    await control.locator('input[autocomplete="username"]').fill("booth1");
-    await control.locator('input[autocomplete="current-password"]').fill("2468");
-    await control.getByRole("button", { name: /sign in|دخول/i }).click();
+    await signInOnly(control);
     await control.goto("/#/control");
 
-    await control.locator("[data-new-cue-en]").fill("Doors open");
-    await control.locator("[data-new-cue-en]").press("Enter");
+    // Bounded: a control room that never renders should fail this gate in seconds, not eat
+    // the whole test timeout waiting for an element that is never coming.
+    const cueField = control.locator("[data-new-cue-en]");
+    await expect(cueField, "the control room is up and signed in").toBeVisible({ timeout: 30_000 });
+    await cueField.fill("Doors open");
+    await cueField.press("Enter");
     await expect(control.locator("[data-cue]").first()).toBeVisible({ timeout: 10_000 });
 
     // A wall screen, opened once and never touched again for the rest of the rehearsal.
