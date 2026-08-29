@@ -4,9 +4,15 @@
 // module. Nothing else in `src/` may call fetch against the backend, so there is exactly one
 // place where authentication, error translation and offline behaviour are decided.
 
+// The production endpoint is compiled in as the default. It is a public URL — the anon key
+// beside it can execute nothing since 0008 — and baking it in is what makes the deploy truly
+// drag-and-drop: the owner uploads a folder, and there is no environment step for him to miss.
+// Before this default existed, a build made without a .env quietly produced a bundle that
+// called /functions/v1/api on its OWN host — a wall that 404s on Cloudflare Pages. The env
+// override remains for the test harness, which points builds at its mock server.
 const API_URL: string =
   (import.meta.env.VITE_API_URL as string | undefined) ??
-  `${(import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? ""}/functions/v1/api`;
+  "https://bdzdvlnmocojsifdkpvd.supabase.co/functions/v1/api";
 
 const TOKEN_KEY = "laqta.session";
 
