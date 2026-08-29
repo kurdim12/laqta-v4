@@ -52,6 +52,9 @@ export interface OutboxItem {
   /** Registration mode: the guest this shot belongs to, decided at the shutter. It rides the
    *  outbox so a registered guest keeps collecting shots straight through an outage. */
   guestId?: string;
+  /** What the guest picked at a picker surface (a shirt id). Provenance, like everything
+   *  else on this record: written once at the shutter, immune to retries. */
+  styleChoice?: string;
   capturedAt: number;
   createdAt: number;
   state: OutboxState;
@@ -101,6 +104,7 @@ export async function enqueue(input: {
   source: OutboxItem["source"];
   deviceId: string;
   guestId?: string;
+  styleChoice?: string;
 }): Promise<void> {
   // The thumbnail is produced here, at capture, so an outage cannot leave a photo that can
   // never be published for want of one. Law 7 and law 1 meet at this line.
@@ -122,6 +126,7 @@ export async function enqueue(input: {
     source: input.source,
     deviceId: input.deviceId,
     guestId: input.guestId,
+    styleChoice: input.styleChoice,
     capturedAt: Date.now(),
     createdAt: Date.now(),
     state: "pending",
@@ -181,6 +186,7 @@ async function uploadOne(item: OutboxItem): Promise<void> {
     captureSource: item.source,
     restyleIntent: item.restyle ? "restyle" : "straight",
     guestId: item.guestId ?? null,
+    styleChoice: item.styleChoice ?? null,
   });
   await call("photo.confirm", { photoId: item.id });
 

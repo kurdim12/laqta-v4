@@ -12,7 +12,8 @@ interface EventRow {
   guest_mode: string; locale_default: string;
   ai_budget_usd: string | null; ai_spend_usd: string;
   max_generations: number; generations_used: number;
-  wall_config: { led?: { columns?: number; rows?: number; cycleSeconds?: number; brandPattern?: string; cutoutPattern?: string } } | null;
+  wall_config: { style?: string; led?: { columns?: number; rows?: number; cycleSeconds?: number; brandPattern?: string; cutoutPattern?: string } } | null;
+  shirt_options: { id: string; en?: string; ar?: string }[] | null;
   ai_prompt: string; ai_model: string; ai_allowed_models: string[];
   ai_est_cost_usd: string;
 }
@@ -60,6 +61,8 @@ export default function Admin() {
   const [brandLocale, setBrandLocale] = useState("ar");
   const [brandPrimary, setBrandPrimary] = useState("#e8c07a");
   const [brandSecondary, setBrandSecondary] = useState("#111111");
+  const [wallStyle, setWallStyle] = useState("classic");
+  const [shirtText, setShirtText] = useState("");
 
   const event = events.find((e) => e.id === selected) ?? null;
 
@@ -93,6 +96,10 @@ export default function Admin() {
     setLedCycle(Number(led?.cycleSeconds) || 8);
     setLedPattern(typeof led?.brandPattern === "string" ? led.brandPattern : "corners");
     setLedCutouts(led?.cutoutPattern === "row" ? "row" : "none");
+    const cfg = events.find((e) => e.id === selected)?.wall_config;
+    setWallStyle(cfg?.style === "vogue" ? "vogue" : "classic");
+    setShirtText((events.find((e) => e.id === selected)?.shirt_options ?? [])
+      .map((o) => `${o.id} | ${o.en ?? ""} | ${o.ar ?? ""}`).join("\n"));
     const ev = events.find((e) => e.id === selected);
     setAiPrompt(ev?.ai_prompt ?? "");
     setAiModel(ev?.ai_model ?? "");
@@ -327,6 +334,7 @@ export default function Admin() {
                   slug: event.slug,
                   wallConfig: {
                     ...(event.wall_config ?? {}),
+                    style: wallStyle,
                     led: { columns: ledCols, rows: ledRows, cycleSeconds: ledCycle,
                            brandPattern: ledPattern, cutoutPattern: ledCutouts },
                   },
@@ -367,8 +375,39 @@ export default function Admin() {
                 <option value="row">{t.patternRow}</option>
               </select>
             </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.wallStyleLabel}</span>
+              <select style={{ maxWidth: 170 }} value={wallStyle}
+                      onChange={(e) => setWallStyle(e.target.value)}>
+                <option value="classic">{t.styleClassic}</option>
+                <option value="vogue">{t.styleVogue}</option>
+              </select>
+            </label>
             <button className="primary" type="submit" disabled={busy}
                     style={{ alignSelf: "end" }}>{t.save}</button>
+          </form>
+
+          <h2>{t.surfaceShirt}</h2>
+          <form
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              // One option per line: id | English | Arabic. Blank lines and stray spaces are
+              // the operator's, not the data's.
+              const parsed = shirtText.split("\n").map((line) => line.trim()).filter(Boolean)
+                .map((line) => {
+                  const [id, en, ar] = line.split("|").map((s) => s.trim());
+                  return { id, en: en || id, ar: ar || en || id };
+                })
+                .filter((o) => o.id);
+              void run(() => call("event.shirts", { eventId: event.id, shirtOptions: parsed }), t.saved);
+            }}
+          >
+            <label>
+              <span>{t.shirtOptionsLabel}</span>
+              <textarea rows={4} value={shirtText} onChange={(e) => setShirtText(e.target.value)}
+                        style={{ fontFamily: "ui-monospace, monospace" }} />
+            </label>
+            <button className="primary" type="submit" disabled={busy}>{t.save}</button>
           </form>
 
           <h2>{t.aiSettings}</h2>

@@ -14,6 +14,8 @@ export default function Home() {
     { to: session?.kind === "operator" ? "/control" : "/operator/login", title: t.surfaceControl, hint: t.surfaceControlHint },
     { to: session?.kind === "operator" ? "/war" : "/operator/login", title: t.surfaceWar, hint: t.surfaceWarHint },
     { to: session?.kind === "operator" ? "/kiosk" : "/operator/login", title: t.surfaceKiosk, hint: t.surfaceKioskHint },
+    { to: session?.kind === "operator" ? "/shirt" : "/operator/login", title: t.surfaceShirt, hint: t.surfaceShirtHint },
+    { to: session?.kind === "operator" ? "/avatar" : "/operator/login", title: t.surfaceAvatar, hint: t.surfaceAvatarHint },
     { to: "/guest", title: t.surfaceGuest, hint: t.surfaceGuestHint },
   ];
 

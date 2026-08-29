@@ -484,3 +484,91 @@ into the same approval queue, show cues + crew tasks UI in the control room, ava
 with its full degradation ladder (honest fallback until Anam keys — law 8), and guest
 delivery is already live from this phase. Gate: each wired into the same approval queue and
 flag system; avatar shows honest configured/missing state.
+
+---
+
+# Phase 6 — The revived five · **GATE GREEN (129/129 SQL + 4/4 browser)**
+
+## 1. What was built
+
+**Shirt-picker kiosk (feature I), into the one queue.** `#/shirt` shows the event's shirt
+catalogue (per-event config, law 5, edited in the admin console as `id | English | Arabic`
+lines and validated in the database — an option without an id is refused). The guest picks,
+shoots, and the choice is written at the shutter as capture provenance on an ordinary photos
+row. Same outbox, same approval queue, same restyle pipeline: the AI runner reads the
+recorded choice and adds it to the event's style template, so the model styles what was
+actually asked for; when AI is paused, capped or unconfigured, the branded original stands
+exactly as it does for every other restyle. Migration 0027 makes a replayed capture unable to
+rewrite the choice — proven in the suite.
+
+**Avatar kiosk (feature I) with its full degradation ladder (law 8).** `#/avatar` asks the API
+whether the avatar provider is configured, and never assumes: with no Anam key the top rung
+answers `not_configured`, the kiosk shows the honest state in the staff corner and runs
+welcome mode — branded bilingual greeting, working camera, same outbox, same queue, shots
+labelled `avatar`. The ladder is re-climbed every minute, so **the day the owner pastes the
+Anam key into Supabase secrets the live rung lights up with no deploy and no code change** —
+demonstrated in the gate by flipping the key's existence and reloading.
+
+**Show cues and crew tasks (feature I), inside the control room.** `#/control` grew both
+panels: cues carry bilingual titles and a fire button that records the moment; tasks carry an
+assignee and a done button that records the moment. Both are event-scoped rows (law 5 — the
+gate proves a cross-event write matches nothing), and their activity flows through the capped,
+deduped telemetry stream (law 3) rather than a second logging path.
+
+**Vogue editorial flow (feature I), as a selectable style.** The grid wall reads
+`wall_config.style`; `vogue` renders the same approved feed as a magazine spread — one hero
+frame with a brand caption plate (the event's logo when it has one), a grayscale contact sheet
+beside it. Selected per event from the admin console. It is a style of the same wall, not a
+second wall: same feed, same publish gate, same self-recovery, same panic behaviour — the gate
+proves panic still empties it.
+
+**Guest delivery**, the fifth of the five, was finished in Phase 5 (gallery + WhatsApp/SMS
+share) and stays gated there.
+
+## 2. The gate, shown passing
+
+**Browser (4/4):** the shirt picker refuses to show a shutter before a pick, then the shot
+arrives labelled `shirt`, carrying `navy`, unapproved, queued for restyle, and the moderator
+sees the choice on the tile in the queue. The avatar kiosk reads `fallback` with no key and
+still lands a photo in the queue, then climbs to `live` on a reload once the key exists. A cue
+typed in the control room fires and is recorded; a task is created and closed. The grid wall
+switches from `classic` to `vogue` on its own poll and still goes brand-only under panic.
+
+**Deterministic suite (129/129):** the thirteen new checks — the shirt shot is an ordinary
+unapproved photo in the moderation feed, the feed carries the choice, a replayed capture
+cannot rewrite it, an avatar shot lands in the same queue, the public shape offers the
+catalogue while still hiding AI config, cues and tasks belong to one event alone, firing and
+closing record their moments, the activity reaches the capped telemetry, a cross-event cue
+write matches nothing, a catalogue with ids is accepted, one without an id is refused, and
+the refused write changed nothing.
+
+**A gate caught a real defect during this phase:** my restated `gate_cleanup` was written from
+0015's version and had lost the `wall_cells` line a later migration added; the apply rolled
+back whole on a foreign-key violation rather than landing a half-broken cleanup. Fixed by
+restating from the live definition.
+
+## 3. Which ledger numbers this touches
+
+Law 8 gets its clearest demonstration: the avatar surface asks whether it is configured, says
+so honestly, works anyway, and needs no deploy to change its answer. Law 5 re-proven for cues
+and tasks. Law 3 extended to show-running activity. Law 1 extended again — the picker choice
+rides the outbox and a retry cannot rewrite it. Law 9 held: five surfaces, zero new API
+layers.
+
+## 4. Regression line
+
+`run_all_gates()`: **129/129** on the live database. Browser gates re-run after every change:
+phase 1 (2), phase 2 (3), phase 3 (2), phase 4 (4), phase 5 (4), phase 6 (4) — **19/19**.
+
+## 5. Debt and owner-hands, recorded
+
+- Still owed before freeze: the worker's generated-image thumbnail resize pass.
+- Owner-hands checklist: OpenRouter key (paid restyles), **Anam key (lights the avatar's live
+  rung — the kiosk works without it today)**, the dress rehearsal itself.
+
+## 6. Next
+
+Phase 7 — rehearsal and freeze: the seed script (a demo event with operators, shirts, cues and
+tasks, ready to run), the event-day checklist, the runbook, and the full regression. Then the
+dress rehearsal — 30 minutes, internet pulled for 10 mid-run — which is the owner's to run,
+and the hard freeze that follows it (law 14).

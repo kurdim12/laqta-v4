@@ -323,6 +323,16 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     }));
   },
 
+  /** Admin only: the shirt picker's catalogue for this event (law 5 — per-event, like every
+   *  other setting). An empty list means the surface honestly offers nothing. */
+  async "event.shirts"(ctx) {
+    requireAdmin(ctx);
+    return one(await rpc("api_set_event_shirts", {
+      p_event_id: ctx.body.eventId,
+      p_shirt_options: ctx.body.shirtOptions ?? [],
+    }));
+  },
+
   /** Admin only: the per-event restyle template, model picker (validated against the allowed
    *  list in the database), caps and reference images (feature D, law 5). */
   async "event.ai"(ctx) {
@@ -416,6 +426,8 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       // Registration mode: a kiosk that registered its guest binds their shots at capture.
       // The composite foreign key refuses a guest from any other event.
       p_guest_id: ctx.body.guestId ?? null,
+      // Picker surfaces (the shirt kiosk) record what the guest chose, at the shutter.
+      p_style_choice: ctx.body.styleChoice ?? null,
     }));
   },
 
@@ -497,6 +509,7 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       createdAt: r.created_at,
       captureSource: r.capture_source,
       restyleIntent: r.restyle_intent,
+      styleChoice: r.style_choice,
       sourcePhotoId: r.source_photo_id,
       operatorBooth: r.operator_booth,
       jobStatus: r.job_status,
@@ -644,6 +657,83 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
         downloadUrl: r.storage_path ? await signedReadUrl(ORIGINALS, r.storage_path, 3600) : null,
       }))),
     };
+  },
+
+  /* -------------------------------------------- show cues and crew tasks (feature I, G) */
+
+  async "cue.list"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return await rpc("api_list_cues", { p_event_id: eventId });
+  },
+
+  async "cue.save"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return one(await rpc("api_save_cue", {
+      p_id: ctx.body.id ?? null, p_event_id: eventId,
+      p_position: ctx.body.position ?? null,
+      p_title_en: ctx.body.titleEn ?? null, p_title_ar: ctx.body.titleAr ?? null,
+    }));
+  },
+
+  async "cue.status"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return one(await rpc("api_set_cue_status", {
+      p_id: ctx.body.id, p_event_id: eventId, p_status: ctx.body.status,
+      p_actor: ctx.session?.username ?? null,
+    }));
+  },
+
+  async "cue.delete"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    await rpc("api_delete_cue", { p_id: ctx.body.id, p_event_id: eventId });
+    return { deleted: true };
+  },
+
+  async "task.list"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return await rpc("api_list_tasks", { p_event_id: eventId });
+  },
+
+  async "task.save"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return one(await rpc("api_save_task", {
+      p_id: ctx.body.id ?? null, p_event_id: eventId,
+      p_title: ctx.body.title ?? null, p_assignee: ctx.body.assignee ?? null,
+    }));
+  },
+
+  async "task.status"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return one(await rpc("api_set_task_status", {
+      p_id: ctx.body.id, p_event_id: eventId, p_status: ctx.body.status,
+      p_actor: ctx.session?.username ?? null,
+    }));
+  },
+
+  async "task.delete"(ctx) {
+    const eventId = ctx.session?.kind === "admin" ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    await rpc("api_delete_task", { p_id: ctx.body.id, p_event_id: eventId });
+    return { deleted: true };
+  },
+
+  /* ---------------------------------------------------------- the avatar's ladder (I, 8) */
+
+  /** The top rung of the avatar kiosk's degradation ladder. With no key in the project's
+   *  secrets this answers its honest name and the kiosk runs its fallback mode; the day the
+   *  owner pastes the Anam key into Supabase secrets, this starts answering with a session
+   *  token and the live rung lights up — no deploy, no code change (law 8). */
+  async "avatar.session"(ctx) {
+    operatorEvent(ctx);
+    const key = Deno.env.get("ANAM_API_KEY");
+    if (!key) return { outcome: "not_configured" };
+    const res = await fetch("https://api.anam.ai/v1/auth/session-token", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) return { outcome: "unreachable", status: res.status };
+    const body = await res.json().catch(() => null);
+    return { outcome: "ok", sessionToken: body?.sessionToken ?? null };
   },
 
   /* ----------------------------------------------------------------------- ops (G, 8, 10) */

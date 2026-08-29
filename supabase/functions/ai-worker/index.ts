@@ -108,12 +108,12 @@ interface EventRow {
   id: string; slug: string; ai_prompt: string; ai_model: string;
   ai_est_cost_usd: string; ai_lease_seconds: number; ai_reference_paths: string[];
 }
-interface PhotoRow { id: string; storage_path: string }
+interface PhotoRow { id: string; storage_path: string; style_choice?: string | null }
 
 /** Calls the model with the runner's own clock: heartbeats renew the lease, and the abort
  *  fires just inside it, so upstream can be slow but never unbounded. */
 async function generate(
-  ev: EventRow, sourceUrl: string, refUrls: string[], job: Job,
+  ev: EventRow, sourceUrl: string, refUrls: string[], job: Job, styleChoice?: string | null,
 ): Promise<{ bytes: Uint8Array; cost: number; model: string }> {
   const controller = new AbortController();
   const budgetMs = Math.max(45_000, (ev.ai_lease_seconds - 30) * 1000);
@@ -123,8 +123,12 @@ async function generate(
   }, HEARTBEAT_MS);
 
   try {
+    // The guest's picker choice (a shirt, a look) is capture provenance riding the photo
+    // row; it joins the event's template so the model styles what was actually asked for.
+    const prompt = (ev.ai_prompt || "Restyle this event photo.")
+      + (styleChoice ? ` The guest chose: ${styleChoice}.` : "");
     const content: unknown[] = [
-      { type: "text", text: ev.ai_prompt || "Restyle this event photo." },
+      { type: "text", text: prompt },
       { type: "image_url", image_url: { url: sourceUrl } },
       ...refUrls.map((u) => ({ type: "image_url", image_url: { url: u } })),
     ];
@@ -204,7 +208,7 @@ async function processOneJob(eventId: string): Promise<boolean> {
       try { refUrls.push(await signedReadUrl(ORIGINALS, p)); } catch { /* a missing reference is not fatal */ }
     }
 
-    const out = await generate(ev, sourceUrl, refUrls, job);
+    const out = await generate(ev, sourceUrl, refUrls, job, photo.style_choice);
 
     const resultId = crypto.randomUUID();
     const base = `${eventId}/${resultId}.jpg`;

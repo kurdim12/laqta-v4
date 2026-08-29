@@ -32,6 +32,13 @@ interface Summary {
   recentOverrides: { actor_label: string; action: string; target_kind: string; created_at: string }[];
 }
 interface Health { api: boolean; database: boolean; storage: boolean; openrouter: boolean; anam: boolean }
+interface Cue {
+  id: string; position: number; title_en: string; title_ar: string;
+  status: string; fired_at: string | null;
+}
+interface CrewTask {
+  id: string; title: string; assignee: string | null; status: string; done_at: string | null;
+}
 
 const SWITCHES = [
   { key: "wallFrozen", field: "wall_frozen", label: "wallFrozen" },
@@ -51,20 +58,30 @@ export default function Control() {
   const [busy, setBusy] = useState(false);
   const [bannerEn, setBannerEn] = useState("");
   const [bannerAr, setBannerAr] = useState("");
+  const [cues, setCues] = useState<Cue[]>([]);
+  const [tasks, setTasks] = useState<CrewTask[]>([]);
+  const [newCueEn, setNewCueEn] = useState("");
+  const [newCueAr, setNewCueAr] = useState("");
+  const [newTask, setNewTask] = useState("");
+  const [newAssignee, setNewAssignee] = useState("");
 
   const slug = session?.eventSlug ?? "";
 
   const refresh = useCallback(async () => {
     if (!slug) return;
     try {
-      const [sum, st, h] = await Promise.all([
+      const [sum, st, h, cu, tk] = await Promise.all([
         call<Summary>("ops.summary", { eventSlug: slug }),
         call<Station[]>("ops.stations", {}),
         call<Health>("ops.health", {}),
+        call<Cue[]>("cue.list", {}),
+        call<CrewTask[]>("task.list", {}),
       ]);
       setSummary(sum);
       setStations(st ?? []);
       setHealth(h);
+      setCues(cu ?? []);
+      setTasks(tk ?? []);
       setError(null);
     } catch (err) {
       if (err instanceof ApiError && !err.isOffline) {
@@ -88,6 +105,20 @@ export default function Control() {
     // fight the person typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [summary?.event.id]);
+
+  /** One shape for every cue/task write: do it, then re-read, so the panel shows the
+   *  database's answer rather than an optimistic guess. */
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true);
+    try {
+      await fn();
+      await refresh();
+    } catch (err) {
+      setError(messageFor(err instanceof ApiError ? err.code : "", t as unknown as Record<string, string>));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function flip(key: string, value: boolean) {
     setBusy(true);
@@ -207,6 +238,101 @@ export default function Control() {
               ) : null}
             </div>
           </div>
+
+          <h2>{t.cues}</h2>
+          <table>
+            <tbody>
+              {cues.map((c) => (
+                <tr key={c.id} data-cue={c.id} data-cue-status={c.status}>
+                  <td className="muted">{c.position}</td>
+                  <td>{c.title_en}</td>
+                  <td dir="rtl">{c.title_ar}</td>
+                  <td className="muted">
+                    {c.fired_at ? new Date(c.fired_at).toLocaleTimeString() : ""}
+                  </td>
+                  <td>
+                    <button className={c.status === "done" ? "" : "primary"} disabled={busy}
+                            data-fire-cue={c.id}
+                            onClick={() => void act(() => call("cue.status", {
+                              id: c.id, status: c.status === "done" ? "pending" : "done",
+                            }))}>
+                      {c.status === "done" ? t.reopenLabel : t.fireCue}
+                    </button>
+                  </td>
+                  <td>
+                    <button className="ghost" disabled={busy}
+                            onClick={() => void act(() => call("cue.delete", { id: c.id }))}>
+                      ×
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <form
+            className="row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void act(async () => {
+                await call("cue.save", {
+                  titleEn: newCueEn, titleAr: newCueAr, position: cues.length + 1,
+                });
+                setNewCueEn(""); setNewCueAr("");
+              });
+            }}
+          >
+            <input style={{ maxWidth: 220 }} placeholder={t.cueTitleEn} value={newCueEn}
+                   onChange={(e) => setNewCueEn(e.target.value)} data-new-cue-en required />
+            <input style={{ maxWidth: 220 }} dir="rtl" placeholder={t.cueTitleAr} value={newCueAr}
+                   onChange={(e) => setNewCueAr(e.target.value)} />
+            <button className="primary" type="submit" disabled={busy}>{t.create}</button>
+          </form>
+
+          <h2>{t.crewTasks}</h2>
+          <table>
+            <tbody>
+              {tasks.map((k) => (
+                <tr key={k.id} data-task={k.id} data-task-status={k.status}>
+                  <td>{k.title}</td>
+                  <td className="muted">{k.assignee ?? ""}</td>
+                  <td className="muted">
+                    {k.done_at ? new Date(k.done_at).toLocaleTimeString() : ""}
+                  </td>
+                  <td>
+                    <button className={k.status === "done" ? "" : "primary"} disabled={busy}
+                            data-done-task={k.id}
+                            onClick={() => void act(() => call("task.status", {
+                              id: k.id, status: k.status === "done" ? "open" : "done",
+                            }))}>
+                      {k.status === "done" ? t.reopenLabel : t.doneLabel}
+                    </button>
+                  </td>
+                  <td>
+                    <button className="ghost" disabled={busy}
+                            onClick={() => void act(() => call("task.delete", { id: k.id }))}>
+                      ×
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <form
+            className="row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void act(async () => {
+                await call("task.save", { title: newTask, assignee: newAssignee || null });
+                setNewTask(""); setNewAssignee("");
+              });
+            }}
+          >
+            <input style={{ maxWidth: 260 }} placeholder={t.taskTitleLabel} value={newTask}
+                   onChange={(e) => setNewTask(e.target.value)} data-new-task required />
+            <input style={{ maxWidth: 160 }} placeholder={t.assigneeLabel} value={newAssignee}
+                   onChange={(e) => setNewAssignee(e.target.value)} />
+            <button className="primary" type="submit" disabled={busy}>{t.create}</button>
+          </form>
 
           <h2>{t.activity}</h2>
           <table>

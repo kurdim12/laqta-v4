@@ -8,8 +8,10 @@ interface WallPhoto { id: string; kind: string; createdAt: string; thumbUrl: str
 interface EventRow {
   slug: string; name: string; name_ar?: string | null; name_en?: string | null;
   brand_primary: string; brand_secondary: string;
+  brand_logo_url?: string | null;
   wall_frozen: boolean; panic_brand_only: boolean;
   banner_active: boolean; banner_text_en?: string | null; banner_text_ar?: string | null;
+  wall_config?: { style?: string } | null;
 }
 
 const POLL_MS = 5000;
@@ -81,6 +83,7 @@ export default function Wall() {
   const banner = event?.banner_active
     ? pick(locale, event.banner_text_ar, event.banner_text_en, "")
     : "";
+  const vogue = event?.wall_config?.style === "vogue";
 
   return (
     <div className="wall" style={event ? { background: "#000" } : undefined}>
@@ -99,8 +102,28 @@ export default function Wall() {
         </div>
       ) : photos.length === 0 ? (
         <div className="wall-empty">{t.wallEmpty}</div>
+      ) : vogue ? (
+        // Vogue editorial (feature I): the same approved thumbnails, laid out as a magazine
+        // spread — one hero frame with a caption plate, the rest as a contact sheet beside
+        // it. A selectable style, not a second wall: same feed, same publish gate, same
+        // self-recovery, so everything Phase 2 proved about this wall still holds.
+        <div className="wall-vogue" data-wall-style="vogue">
+          <figure className="vogue-hero">
+            {photos[0]?.thumbUrl ? <img src={photos[0].thumbUrl} alt="" /> : null}
+            <figcaption style={{ color: event?.brand_primary ?? "#fff" }}>
+              {event?.brand_logo_url
+                ? <img className="vogue-logo" src={event.brand_logo_url} alt="" />
+                : <span className="vogue-word">{title || t.appName}</span>}
+            </figcaption>
+          </figure>
+          <div className="vogue-sheet">
+            {photos.slice(1, 9).map((p) =>
+              p.thumbUrl ? <img key={p.id} src={p.thumbUrl} alt="" loading="lazy" /> : null,
+            )}
+          </div>
+        </div>
       ) : (
-        <div className="wall-grid">
+        <div className="wall-grid" data-wall-style="classic">
           {photos.map((p) =>
             p.thumbUrl ? <img key={p.id} src={p.thumbUrl} alt="" loading="lazy" /> : null,
           )}

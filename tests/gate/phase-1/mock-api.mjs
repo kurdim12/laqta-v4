@@ -22,6 +22,10 @@ const enqueues = [];               // photoIds whose restyle was queued
 const stations = new Map();        // deviceId -> {kind,label,depth,last}
 const placements = new Map();      // cellIndex -> photoId
 const modes = new Map();           // slug -> guest_mode (default wall_only, as in 0012)
+const cues = new Map();            // cueId -> row
+const tasks = new Map();           // taskId -> row
+const shirts = new Map();          // slug -> [{id,en,ar}]
+let anamConfigured = false;        // the avatar ladder's top rung, flipped by /__test/anam
 const guests = new Map();          // guestId -> {name, consent}
 const codes = new Map();           // code -> {photoId|null, guestId|null}
 let lastLoginSlug = "ev-1";        // the mock's stand-in for the operator session's event
@@ -96,10 +100,28 @@ const server = createServer(async (req, res) => {
     modes.set(url.searchParams.get("slug"), url.searchParams.get("mode"));
     return json(res, 200, { ok: true, modes: [...modes.entries()] });
   }
+  if (url.pathname === "/__test/shirts") {
+    // ids only, comma separated: the catalogue's shape is proven in SQL, not here
+    shirts.set(url.searchParams.get("slug"),
+      (url.searchParams.get("ids") || "").split(",").filter(Boolean)
+        .map((id) => ({ id, en: id, ar: id })));
+    return json(res, 200, { ok: true });
+  }
+  if (url.pathname === "/__test/anam") {
+    anamConfigured = url.searchParams.get("on") === "1";
+    return json(res, 200, { ok: true, anamConfigured });
+  }
+  if (url.pathname === "/__test/style") {
+    // what the real wall reads out of wall_config
+    wall.config = { ...wall.config, style: url.searchParams.get("style") || "classic" };
+    return json(res, 200, { ok: true, config: wall.config });
+  }
   if (url.pathname === "/__test/reset") {
     photos.clear(); registerCalls.length = 0; uploads.clear(); failUntil = 0;
     cutouts.clear(); enqueues.length = 0; stations.clear(); placements.clear();
     modes.clear(); guests.clear(); codes.clear(); lastLoginSlug = "ev-1";
+    cues.clear(); tasks.clear(); shirts.clear(); anamConfigured = false;
+    wall.config = { led: { columns: 2, rows: 2, cycleSeconds: 2, brandPattern: "none" } };
     Object.assign(switches, { wallFrozen: false, panicBrandOnly: false, intakePaused: false,
                               aiPaused: false, bannerActive: false, bannerTextEn: null, bannerTextAr: null });
     wall.photoCount = 0; wall.panic = false; wall.frozen = false;
@@ -198,6 +220,7 @@ const server = createServer(async (req, res) => {
           device_id: body.deviceId, restyle_intent: body.restyleIntent,
           capture_source: body.captureSource ?? "booth",
           guest_id: body.guestId ?? null,
+          style_choice: body.styleChoice ?? null,
           client_captured_at: body.clientCapturedAt,
           created_at: new Date().toISOString(),
         });
@@ -273,6 +296,7 @@ const server = createServer(async (req, res) => {
         id: p.id, kind: "original", status: p.status ?? "ready",
         approved: Boolean(p.approved), createdAt: p.created_at,
         captureSource: p.capture_source ?? "booth", restyleIntent: p.restyle_intent ?? "straight",
+        styleChoice: p.style_choice ?? null,
         sourcePhotoId: null, operatorBooth: "A", jobStatus: null, jobError: null,
         resultPhotoId: null,
         thumbUrl: `http://localhost:${PORT}/thumb/${p.id}`, cutoutUrl: null,
@@ -305,7 +329,67 @@ const server = createServer(async (req, res) => {
           wall_frozen: wall.frozen, panic_brand_only: wall.panic,
           banner_active: false, banner_text_en: null, banner_text_ar: null,
           guest_mode: modeOf(body.slug), wall_config: wall.config,
+          shirt_options: shirts.get(body.slug) ?? [],
         },
+      });
+
+    /* ------------ the revived five: cues, tasks, and the avatar's honest ladder ---------- */
+
+    case "cue.list":
+      return json(res, 200, { ok: true, data: [...cues.values()] });
+
+    case "cue.save": {
+      const id = body.id ?? `cue-${cues.size + 1}`;
+      const row = cues.get(id) ?? { id, position: body.position ?? 0, status: "pending", fired_at: null };
+      row.title_en = body.titleEn ?? row.title_en ?? "";
+      row.title_ar = body.titleAr ?? row.title_ar ?? "";
+      cues.set(id, row);
+      return json(res, 200, { ok: true, data: row });
+    }
+
+    case "cue.status": {
+      const row = cues.get(body.id);
+      if (row) {
+        row.status = body.status;
+        row.fired_at = body.status === "done" ? new Date().toISOString() : row.fired_at;
+      }
+      return json(res, 200, { ok: true, data: row ?? null });
+    }
+
+    case "cue.delete":
+      cues.delete(body.id);
+      return json(res, 200, { ok: true, data: { deleted: true } });
+
+    case "task.list":
+      return json(res, 200, { ok: true, data: [...tasks.values()] });
+
+    case "task.save": {
+      const id = body.id ?? `task-${tasks.size + 1}`;
+      const row = tasks.get(id) ?? { id, status: "open", done_at: null };
+      row.title = body.title ?? row.title ?? "";
+      row.assignee = body.assignee ?? row.assignee ?? null;
+      tasks.set(id, row);
+      return json(res, 200, { ok: true, data: row });
+    }
+
+    case "task.status": {
+      const row = tasks.get(body.id);
+      if (row) {
+        row.status = body.status;
+        row.done_at = body.status === "done" ? new Date().toISOString() : null;
+      }
+      return json(res, 200, { ok: true, data: row ?? null });
+    }
+
+    case "task.delete":
+      tasks.delete(body.id);
+      return json(res, 200, { ok: true, data: { deleted: true } });
+
+    case "avatar.session":
+      // Exactly what the real action answers: the honest name when no key is present.
+      return json(res, 200, {
+        ok: true,
+        data: anamConfigured ? { outcome: "ok", sessionToken: "mock-token" } : { outcome: "not_configured" },
       });
 
     /* ---- guests: the same contract 0025 enforces, minus nothing the frontend can see ---- */

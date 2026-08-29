@@ -11,6 +11,7 @@ interface FeedRow {
   approved: boolean;
   createdAt: string;
   captureSource?: string | null;
+  styleChoice?: string | null;
   sourcePhotoId?: string | null;
   jobStatus?: string | null;
   thumbUrl?: string | null;
@@ -77,6 +78,9 @@ export default function Queue() {
               <div className="meta">
                 <span className="pill warn">{t.pending}</span>
                 {p.captureSource ? <span className="pill">{p.captureSource}</span> : null}
+                {/* What the guest picked at a picker surface: the moderator should be able to
+                    see whether the shot got the thing it was taken for. */}
+                {p.styleChoice ? <span className="pill">{p.styleChoice}</span> : null}
                 <span className="muted" style={{ fontSize: ".78rem" }}>
                   {new Date(p.createdAt).toLocaleTimeString()}
                 </span>

@@ -14,6 +14,8 @@ import QrKit from "./routes/QrKit";
 import Control from "./routes/Control";
 import War from "./routes/War";
 import Kiosk from "./routes/Kiosk";
+import Shirt from "./routes/Shirt";
+import Avatar from "./routes/Avatar";
 import NotFound from "./routes/NotFound";
 
 /** Role-based routes, one PWA. Each station opens the URL for its job and installs it. */
@@ -35,6 +37,8 @@ export default function App() {
       <Route path="/control" element={<Control />} />
       <Route path="/war" element={<War />} />
       <Route path="/kiosk" element={<Kiosk />} />
+      <Route path="/shirt" element={<Shirt />} />
+      <Route path="/avatar" element={<Avatar />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

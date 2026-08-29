@@ -16,7 +16,8 @@
     "gate:phase2:full": "npm run build:test && LAQTA_CUT_MINUTES=5 playwright test tests/gate/phase-2",
     "gate:phase3": "npm run build:test && playwright test tests/gate/phase-3",
     "gate:phase4": "npm run build:test && playwright test tests/gate/phase-4",
-    "gate:phase5": "npm run build:test && playwright test tests/gate/phase-5"
+    "gate:phase5": "npm run build:test && playwright test tests/gate/phase-5",
+    "gate:phase6": "npm run build:test && playwright test tests/gate/phase-6"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.4.5",
