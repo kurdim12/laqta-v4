@@ -572,3 +572,121 @@ Phase 7 — rehearsal and freeze: the seed script (a demo event with operators, 
 tasks, ready to run), the event-day checklist, the runbook, and the full regression. Then the
 dress rehearsal — 30 minutes, internet pulled for 10 mid-run — which is the owner's to run,
 and the hard freeze that follows it (law 14).
+
+---
+
+# Phase 7 — Rehearsal & freeze · **GATE GREEN (137/137 SQL + 20/20 browser)**
+
+## 1. What was built
+
+**The last debt paid (law 7, for generated photos).** The AI runner used to store a generated
+image as its own thumbnail — a full-resolution file behind every wall, which is the exact
+egress failure law 7 exists to kill. It now makes a real 512px thumbnail, and the proof is a
+probe run on the production runtime and recorded where ops can read it: a 1600×1600 noise
+source of **1,501,401 bytes became 348,076 bytes at exactly 512×512, in 97 ms**. Noise is the
+worst case; a real photograph shrinks far more. The gate asserts that recorded probe forever,
+the same way it asserts the 95-second run. A resize that fails costs quality, never the photo:
+the original bytes stand in and the shot still publishes.
+
+**The seed.** `seed_demo_event()` sets up a repeatable rehearsal in one call — a live,
+code-per-shot event with three shirts, four cues, four crew tasks and one operator. It is
+idempotent (verified: the second run created nothing, the counts held, the seeded operator
+logs in), and the PIN is a parameter, so no credential lives in the schema or in any file.
+
+**The paperwork that makes it runnable without me.** `docs/EVENT-DAY-CHECKLIST.md` (one page:
+the night before, T-60, T-15, during, what to do when something goes wrong, after),
+`docs/RUNBOOK.md` (deploy, station URLs, seeding, secrets, watching, diagnosing, repairing,
+the gate suite, and what the freeze means), and `docs/OWNER-CHECKLIST.md` (the four things
+that genuinely need the owner's hands, each browser-only and under two minutes).
+
+## 2. A pre-freeze audit, and what it found
+
+I went looking outside where the laws had been looking, and law 9's proof turned out narrower
+than its claim. The check "the public anon key can execute nothing" counts routines in the
+`public` schema — but `pg_net` (an HTTP request emitter, with a queue table anon holds every
+privilege on) and `pg_cron` (the scheduler) live in their own schemas and grant EXECUTE to
+`PUBLIC`, which every role inherits.
+
+**What is actually reachable: nothing** — and that was measured, not assumed. A live request to
+this project's own API carrying the real anon key, asking for a routine outside `public`, came
+back `404 PGRST202 — "Searched for the function public.http_post ... no matches were found"`.
+PostgREST resolves RPC only inside its exposed schema. The `cron` schema additionally denies
+anon USAGE outright.
+
+**What could not be fixed, said plainly:** those grants belong to `supabase_admin`, and this
+project's `postgres` role is not a member of it. An earlier draft of the migration tried to
+revoke them; its own pre-commit assertion caught that the revoke had silently changed nothing
+and rolled the whole migration back rather than let me claim a fix that had not happened. The
+residual is a platform default. The mitigation that IS ours is now a freeze invariant in the
+runbook: **the exposed-schema list stays `public`** — adding `net` or `cron` to it would hand
+anyone holding the public anon key an HTTP emitter and a job scheduler.
+
+Migration 0030 turns all of that into permanent checks: the recorded live probe is asserted on
+every gate run, and the schema-lock assertion gained a rule we can hold — no hand-written
+routine of ours ever lives outside `public` (extension members excluded by their dependency,
+because pgcrypto in `extensions` is a deliberate, pinned install, not a stray function).
+
+## 3. The dress rehearsal, and what the first run caught
+
+The rehearsal is executable: a single continuous session that starts a show, kills its
+internet mid-run for the contract's full ten minutes, and checks what the contract asks —
+zero photos lost, walls recovering alone, ops telling the truth throughout, one logged
+override.
+
+**The first full-window run failed, and it was the gate's own bug.** It hung for its entire
+twenty-minute ceiling on one line: the control room's cue field never appeared, because the
+spec navigated to `#/control` immediately after clicking sign-in without waiting for the
+session to exist, so the page bounced back to the login screen. The short run had been winning
+that race; the long one lost it. Fixed by waiting for the session to be real before anything
+navigates, and by bounding the first assertion so a control room that never renders fails in
+seconds instead of eating the whole budget. Worth recording plainly: a gate that hangs is a
+gate that tells you nothing, and this one was hiding a race rather than proving a product.
+
+**The recorded run: 10.3 minutes, green.** In one continuous session, on the real build:
+
+1. The show starts — a cue on the board, four shots taken, approved, reaching the wall the
+   room can see.
+2. The internet dies. Six more shots are taken dark; all six sit on the device, none reach the
+   server, and the wall — never told anything — keeps showing the room what it had.
+3. Ops tells the truth while it is dark: the booth reads offline in the control room, which is
+   on its own connection, exactly as it would be on a hotspot at a real event.
+4. Ten minutes pass. The queue never shrinks, not once, checked every five seconds throughout.
+   The station is power-cycled mid-outage and still holds all six.
+5. The internet returns. **All ten photos arrive — four from before, six from the dark — and
+   not one of them twice.** The device queue drains to empty.
+6. An override is made and takes effect.
+7. The wall catches up on its own: no refresh, no human, nobody touching the screen. The show
+   board still holds what the control room put there.
+
+## 4. Regression line
+
+`run_all_gates()`: **137/137** on the live database, across all seven phases. Browser gates,
+every one re-run after the last change: phase 1 (2), phase 2 (3), phase 3 (2), phase 4 (4),
+phase 5 (4), phase 6 (4), phase 7 (1) — **20/20**.
+
+## 5. What was added to the stack during the run, recorded
+
+Two dependencies, both free, both bundled rather than fetched at runtime:
+
+- `qrcode` (MIT) — draws guest codes locally, so an operator can hand a guest their code while
+  the venue's internet is down.
+- `imagescript` (via the AI runner) — makes the generated-image thumbnail that law 7 requires.
+
+## 6. Where the ledger stands
+
+All fourteen laws are dead by design and demonstrably so, each with a permanent executable
+check that re-runs before every future change. Law 14 — the freeze — is the one that cannot be
+closed from here: it is triggered by the owner's own rehearsal on real hardware in a real
+venue, which is item 4 on his checklist. Everything is ready for it.
+
+## 7. Owner-hands, the complete and final list
+
+`docs/OWNER-CHECKLIST.md`, four items, all browser-only:
+
+1. Put the app on a web address (drag-and-drop, ~2 min).
+2. Paste the OpenRouter key into Supabase secrets — turns on paid restyles (~2 min).
+3. Paste the Anam key — lights the avatar kiosk's live host (~2 min).
+4. Run the dress rehearsal on real hardware, then the freeze (30 min).
+
+Nothing in this build waits on any of them. Items 2 and 3 light up extra capability; without
+them those features run in honest, designed fallback, which is what law 8 asks for.
