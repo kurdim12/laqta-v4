@@ -12,7 +12,9 @@ interface EventRow {
   guest_mode: string; locale_default: string;
   ai_budget_usd: string | null; ai_spend_usd: string;
   max_generations: number; generations_used: number;
-  wall_config: { led?: { columns?: number; rows?: number; cycleSeconds?: number; brandPattern?: string } } | null;
+  wall_config: { led?: { columns?: number; rows?: number; cycleSeconds?: number; brandPattern?: string; cutoutPattern?: string } } | null;
+  ai_prompt: string; ai_model: string; ai_allowed_models: string[];
+  ai_est_cost_usd: string;
 }
 interface OperatorRow {
   id: string; username: string; display_name: string; booth: string; role: string; active: boolean;
@@ -47,6 +49,12 @@ export default function Admin() {
   const [ledRows, setLedRows] = useState(3);
   const [ledCycle, setLedCycle] = useState(8);
   const [ledPattern, setLedPattern] = useState("corners");
+  const [ledCutouts, setLedCutouts] = useState("none");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiModel, setAiModel] = useState("");
+  const [aiBudget, setAiBudget] = useState("");
+  const [aiEst, setAiEst] = useState("0.04");
+  const [aiMax, setAiMax] = useState(1000);
 
   const event = events.find((e) => e.id === selected) ?? null;
 
@@ -79,6 +87,13 @@ export default function Admin() {
     setLedRows(Number(led?.rows) || 3);
     setLedCycle(Number(led?.cycleSeconds) || 8);
     setLedPattern(typeof led?.brandPattern === "string" ? led.brandPattern : "corners");
+    setLedCutouts(led?.cutoutPattern === "row" ? "row" : "none");
+    const ev = events.find((e) => e.id === selected);
+    setAiPrompt(ev?.ai_prompt ?? "");
+    setAiModel(ev?.ai_model ?? "");
+    setAiBudget(ev?.ai_budget_usd != null ? String(ev.ai_budget_usd) : "");
+    setAiEst(ev?.ai_est_cost_usd != null ? String(ev.ai_est_cost_usd) : "0.04");
+    setAiMax(ev?.max_generations ?? 1000);
   }, [selected, events]);
 
   async function run(fn: () => Promise<unknown>, okMessage?: string) {
@@ -180,7 +195,8 @@ export default function Admin() {
                   slug: event.slug,
                   wallConfig: {
                     ...(event.wall_config ?? {}),
-                    led: { columns: ledCols, rows: ledRows, cycleSeconds: ledCycle, brandPattern: ledPattern },
+                    led: { columns: ledCols, rows: ledRows, cycleSeconds: ledCycle,
+                           brandPattern: ledPattern, cutoutPattern: ledCutouts },
                   },
                 }),
                 t.saved,
@@ -211,8 +227,68 @@ export default function Admin() {
                 <option value="row">{t.patternRow}</option>
               </select>
             </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.cutoutRow}</span>
+              <select style={{ maxWidth: 140 }} value={ledCutouts}
+                      onChange={(e) => setLedCutouts(e.target.value)}>
+                <option value="none">{t.patternNone}</option>
+                <option value="row">{t.patternRow}</option>
+              </select>
+            </label>
             <button className="primary" type="submit" disabled={busy}
                     style={{ alignSelf: "end" }}>{t.save}</button>
+          </form>
+
+          <h2>{t.aiSettings}</h2>
+          <form
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              void run(
+                () => call("event.ai", {
+                  slug: event.slug,
+                  aiPrompt,
+                  aiModel: aiModel || null,
+                  budgetUsd: aiBudget === "" ? null : Number(aiBudget),
+                  estCostUsd: Number(aiEst) || 0,
+                  maxGenerations: aiMax,
+                }),
+                t.saved,
+              );
+            }}
+            style={{ maxWidth: 640 }}
+          >
+            <label>
+              <span>{t.aiPrompt}</span>
+              <textarea rows={3} value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} />
+            </label>
+            <div className="row">
+              <label style={{ margin: 0 }}>
+                <span>{t.aiModel}</span>
+                <select style={{ maxWidth: 280 }} value={aiModel}
+                        onChange={(e) => setAiModel(e.target.value)}>
+                  {(event.ai_allowed_models ?? []).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ margin: 0 }}>
+                <span>{t.aiBudget}</span>
+                <input style={{ maxWidth: 110 }} type="number" step="0.01" min="0"
+                       value={aiBudget} onChange={(e) => setAiBudget(e.target.value)} />
+              </label>
+              <label style={{ margin: 0 }}>
+                <span>{t.aiEstCost}</span>
+                <input style={{ maxWidth: 110 }} type="number" step="0.005" min="0"
+                       value={aiEst} onChange={(e) => setAiEst(e.target.value)} />
+              </label>
+              <label style={{ margin: 0 }}>
+                <span>{t.aiMaxGenerations}</span>
+                <input style={{ maxWidth: 110 }} type="number" min="0"
+                       value={aiMax} onChange={(e) => setAiMax(Number(e.target.value))} />
+              </label>
+              <button className="primary" type="submit" disabled={busy}
+                      style={{ alignSelf: "end" }}>{t.save}</button>
+            </div>
           </form>
 
           <h2>{t.operators}</h2>

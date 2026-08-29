@@ -6,6 +6,7 @@ import { ApiError, call, messageFor } from "../api/client";
 import { useSession } from "../state/useSession";
 import { deviceId } from "../api/photo";
 import { enqueue, kick, list, needsAttention, startSync, subscribe, type OutboxItem } from "../offline/outbox";
+import { warmCutout } from "../api/cutout";
 
 interface FeedRow {
   id: string;
@@ -29,6 +30,10 @@ export default function Booth() {
   // The sync loop runs for the life of this page, and the queue view is driven by the outbox
   // itself rather than by component state — so a reload shows exactly what is still on disk.
   useEffect(() => {
+    // Warm the background-removal model while the operator is still settling in, so the
+    // first real shot does not pay the model-load cost. Failure marks cutouts unavailable
+    // for the session — the honest degrade, decided once, not 25 seconds per shot.
+    void warmCutout();
     const stopSync = startSync();
     const unsubscribe = subscribe(setQueue);
     void list().then(setQueue);

@@ -192,3 +192,127 @@ Phase 2 — the three walls: LED backdrop with configurable per-event layout, cl
 28-cell lightbox with persisted placement. Gate: each survives a hard refresh and a five-minute
 network cut mid-show and resumes correct state alone, and unpublished photos are provably
 unreachable.
+
+---
+
+# Phase 2 — Walls · **GATE GREEN (86/86 suite + full 5-minute cuts)**
+
+## 1. What was built
+
+All three walls (feature F), sharing one recovery discipline: hold the last good state in
+memory and on disk, reconcile alone the moment the network or tab wakes, and never go blank in
+front of a room.
+
+- **Classic grid** — thumbnails only, hardened since Phase 0.
+- **28-cell lightbox** — placement is a database table, not component memory: it survives
+  refresh, power cut, and a second screen opening the same wall. One tick heals dead
+  placements, autofills unless frozen, returns nothing under panic. Manual placement exists and
+  is audited (its war-room UI arrives with Phase 4).
+- **LED backdrop** — brand cells, photo cells with cycling, cutout cells; columns, rows, cycle
+  speed and patterns are a per-event setting edited in the admin console. Nothing hardcoded to
+  a venue.
+
+Walls also stopped seeing the whole events row: `api_event_public` is the narrow shape an
+unauthenticated screen may know, with AI prompt, budgets and spend **structurally absent from
+its return type** — asserted by the gate.
+
+## 2. The gate, shown passing
+
+**Recorded full run: 3 passed (15.2m) — each wall held through a genuine 5-minute network cut:**
+loaded mid-show → cut → never blank throughout (checked continuously) → power-cycled mid-cut and
+came back showing the wall → reconciled alone on reconnect to the state the show had moved to.
+The LED wall additionally proved its cycling and obeyed a panic flipped while it was dark.
+
+**Database half (in `run_all_gates()`):** autofill places only publishable photos; an unapproved
+photo leaves the wall **even while frozen** (the publish gate outranks the freeze); panic
+empties and recovery is unassisted; a photo placed by hand occupies exactly one cell; another
+event's photo **cannot** be placed on this wall (composite FK, not vigilance); layout
+round-trips per event and never touches the other event.
+
+## 3. Defect caught by the gate
+
+`api_lightbox_place` failed at runtime: its OUT column shadowed a table column inside
+`ON CONFLICT` — an ambiguity Postgres resolves only when the statement runs, so 0019 applied
+cleanly and then failed under test. Fixed in 0020, which proves itself by running the entire
+suite and raising on any red.
+
+## 4. Decision recorded
+
+Walls poll through the single API layer rather than opening anon Realtime reads — the stack
+note and the anon lockdown were structurally incompatible; the lockdown won. Both options and
+the reasoning: `docs/decisions/0002-polling-over-realtime.md`.
+
+---
+
+# Phase 3 — AI · **GATE GREEN (86/86, incl. the recorded 95-second run)**
+
+## 1. What was built
+
+**The job runner (law 4).** An Edge Function pg_cron pokes every minute through pg_net. The
+poke is not the clock: the function answers in milliseconds and drains on its own time. The
+lease from 0014 is the clock: the runner heartbeats while a model works, and its own abort
+fires just inside the lease — bounded by OUR configured clock, never the platform's. The poke
+is authenticated by a token that lives only in the database; nothing new for the owner to hold.
+
+**Money (feature D).** The estimate is consumed BEFORE the paid call — count cap and dollar
+cap in one atomic statement. Success settles the estimate against the model's real cost; every
+failure refunds it. The admin console gained the per-event style prompt, model picker
+(validated against the allowed list in the database — a typo cannot silently break event
+night), budget, estimate and generation cap.
+
+**Idempotent enqueue (laws 1 & 4 meeting).** A partial unique index converges a replayed
+enqueue on the existing job, the same way a replayed upload converges on the existing photo. A
+retrying outbox structurally cannot start a second paid generation.
+
+**Self-hosted background removal (law 2).** The model — 44MB of weights plus the wasm
+runtimes, 20 content-addressed chunks, every file ≤19MB — ships inside the deploy folder at
+`./models/`. The booth warms it at sign-in with a real inference, cuts out after each capture
+under a hard timeout (90s cold / 20s warm), and a missing/slow/broken model degrades to the
+original silently. LED cutout cells render the figures; a photo without one renders contained.
+
+## 2. The gate, shown passing
+
+**The 90-second-class run, on the production runtime:** the runner held its clock for a
+measured **95,006 ms** and completed — recorded permanently in ops, and the suite now asserts
+that record forever. (v1's platform killed at ~20s.)
+
+**Live drain, end to end through pg_net:** poke authenticated (bad token → 401), job claimed
+under lease, cap consumed, then — the key discovery — failed terminally as
+`AI_NOT_CONFIGURED`: **the OpenRouter key is not yet in the project's secrets**, the runner
+runs in its honest law-8 fallback, and the reservation was refunded to the cent
+(`used=1, spend=0`).
+
+**Browser, real model:** a capture produced a real cutout from the shipped model with an
+origin-lock proving **zero requests left our origin**; with the model directory deliberately
+dead, the capture pipeline completed untouched, no cutout ever recorded, exactly one photo —
+"use original", automatic and silent. 2 passed (30.5s).
+
+**Deterministic suite:** replayed enqueue converges; failed photo may be re-enqueued; paused
+event invisible to the drain and visible the moment the pause lifts; cap refuses the crossing
+reservation BEFORE spend; settlement swaps estimates for reality (`spend = 0.021`, to the
+tenth of a cent); a disallowed model is refused.
+
+## 3. Which ledger numbers died
+
+**Law 4 — dead**: queued jobs, no forced timeout (95s measured), runner owns its clock, lease
+protects against double payment. **Law 2 — dead**: model ships with the app, hard timeout,
+automatic use-original — proven in both directions in a real browser. The full paid-path
+lights up the day the key lands; its absence today is the honest state law 8 requires, visible
+in `ops.health`.
+
+## 4. Regression line
+
+`run_all_gates()`: **86/86.** Phases 0–2 re-passed inside the same call.
+
+## 5. Debt and owner-hands, recorded
+
+- Worker stores a generated image as its own thumbnail (display-sized, but unresized). A
+  resize pass is owed before Phase 7 freeze.
+- Event branding logo upload (feature A) not yet wired to a UI — owed before Phase 5 ends.
+- **Owner-hands (end-of-run checklist):** paste the OpenRouter key into Supabase secrets
+  (browser-only, ~2 min) to light up paid restyles; Anam keys likewise when avatar arrives.
+
+## 6. Next
+
+Phase 4 — control room and ops: the switches UI (already enforced server-side), live overview
+on the sane telemetry, war-room with remote cell swap, station kill test (offline within 10s).

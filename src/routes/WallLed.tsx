@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { useI18n } from "../i18n";
 import { PanicScreen, WallBanner, WallStateBadge, useWallFeed } from "../components/wallCommon";
 
-interface WallPhoto { id: string; kind: string; createdAt: string; thumbUrl: string | null }
+interface WallPhoto { id: string; kind: string; createdAt: string; thumbUrl: string | null; cutoutUrl?: string | null }
 
 // The LED backdrop wall: a fixed grid of cells behind a stage. Brand cells carry the event's
 // identity; photo cells cycle through the approved feed. The layout is a PER-EVENT setting
@@ -19,9 +19,14 @@ interface LedLayout {
   rows: number;
   cycleSeconds: number;
   brandPattern: "none" | "corners" | "row";
+  /** "row" renders the bottom row as cutout cells: background-removed figures when a photo
+   *  has one, the contained photo when it does not — law 2's fallback made visible. */
+  cutoutPattern: "none" | "row";
 }
 
-const DEFAULT_LAYOUT: LedLayout = { columns: 6, rows: 3, cycleSeconds: 8, brandPattern: "corners" };
+const DEFAULT_LAYOUT: LedLayout = {
+  columns: 6, rows: 3, cycleSeconds: 8, brandPattern: "corners", cutoutPattern: "none",
+};
 
 function brandCellsFor(l: LedLayout): Set<number> {
   const last = l.columns * l.rows - 1;
@@ -51,6 +56,7 @@ export default function WallLed() {
       brandPattern: (["none", "corners", "row"] as const).includes(raw.brandPattern as never)
         ? (raw.brandPattern as LedLayout["brandPattern"])
         : DEFAULT_LAYOUT.brandPattern,
+      cutoutPattern: raw.cutoutPattern === "row" ? "row" : "none",
     };
   }, [event?.wall_config]);
 
@@ -103,9 +109,12 @@ export default function WallLed() {
             const p = photos.length
               ? photos[(slot + offset * photoCellCount) % photos.length]
               : null;
+            const bottomRow = cell >= totalCells - layout.columns;
+            const asCutout = layout.cutoutPattern === "row" && bottomRow;
+            const src = asCutout ? (p?.cutoutUrl ?? p?.thumbUrl) : p?.thumbUrl;
             return (
-              <div key={cell} className="led-photo">
-                {p?.thumbUrl ? <img src={p.thumbUrl} alt="" loading="lazy" /> : null}
+              <div key={cell} className={asCutout ? "led-photo led-cutout" : "led-photo"}>
+                {src ? <img src={src} alt="" loading="lazy" /> : null}
               </div>
             );
           })}

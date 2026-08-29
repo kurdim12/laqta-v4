@@ -1,6 +1,7 @@
 import { CACHE, OUTBOX, del, get, getAll, put } from "./db";
 import { ApiError, call } from "../api/client";
 import { makeThumbnail } from "../api/photo";
+import { tryCutout } from "../api/cutout";
 
 // LAW 1. "Internet death lost photos and blinded the system → capture is device-first (local
 // outbox), sync is background with infinite retry."
@@ -135,6 +136,7 @@ async function uploadOne(item: OutboxItem): Promise<void> {
   const target = await call<{
     photoId: string; storagePath: string; thumbPath: string;
     originalUploadUrl: string; thumbUploadUrl: string;
+    cutoutPath?: string; cutoutUploadUrl?: string;
   }>("photo.uploadUrl", { photoId: item.id });
 
   const thumb = item.thumb ?? (await makeThumbnail(item.file));
@@ -165,6 +167,31 @@ async function uploadOne(item: OutboxItem): Promise<void> {
     restyleIntent: item.restyle ? "restyle" : "straight",
   });
   await call("photo.confirm", { photoId: item.id });
+
+  // The photo is safe and publishable from here. Everything below is enrichment: it may
+  // fail, time out, or be skipped, and the photo is not diminished — only un-enriched.
+
+  if (item.restyle) {
+    // Enqueue is idempotent server-side (a partial unique index converges retries on the
+    // existing job), so a crash between confirm and here cannot start a second paid job.
+    await call("photo.enqueue", { photoId: item.id }).catch(() => {
+      /* AI paused or not configured: the original stands, which is the designed fallback */
+    });
+  }
+
+  if (target.cutoutUploadUrl && target.cutoutPath) {
+    // One bounded attempt (law 2's hard timeout lives inside tryCutout). No retry loop: a
+    // photo that cannot be cut out is a photo the wall shows as a thumbnail, silently.
+    const cutout = await tryCutout(item.file);
+    if (cutout) {
+      try {
+        await send(target.cutoutUploadUrl, cutout);
+        await call("photo.setCutout", { photoId: item.id, cutoutPath: target.cutoutPath });
+      } catch {
+        /* the cutout is decoration; losing it costs nothing the room can see */
+      }
+    }
+  }
 }
 
 let draining = false;

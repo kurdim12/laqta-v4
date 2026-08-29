@@ -284,6 +284,22 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     }));
   },
 
+  /** Admin only: the per-event restyle template, model picker (validated against the allowed
+   *  list in the database), caps and reference images (feature D, law 5). */
+  async "event.ai"(ctx) {
+    requireAdmin(ctx);
+    return one(await rpc("api_set_event_ai", {
+      p_slug: ctx.body.slug,
+      p_ai_prompt: ctx.body.aiPrompt ?? null,
+      p_ai_model: ctx.body.aiModel ?? null,
+      p_ai_allowed: ctx.body.aiAllowed ?? null,
+      p_budget_usd: ctx.body.budgetUsd ?? null,
+      p_est_cost_usd: ctx.body.estCostUsd ?? null,
+      p_max_generations: ctx.body.maxGenerations ?? null,
+      p_reference_paths: ctx.body.referencePaths ?? null,
+    }));
+  },
+
   /* -------------------------------------------------------------- control switches (G) */
 
   async "event.switches"(ctx) {
@@ -331,12 +347,17 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     const photoId = String(ctx.body.photoId ?? "");
     if (!/^[0-9a-f-]{36}$/i.test(photoId)) throw new ApiError("BAD_PHOTO_ID", 400);
     const base = `${eventId}/${photoId}.jpg`;
+    const cutout = `${eventId}/${photoId}.cutout.png`;
     return {
       photoId,
       storagePath: base,
       thumbPath: base,
+      cutoutPath: cutout,
       originalUploadUrl: await signedUploadUrl(ORIGINALS, base),
       thumbUploadUrl: await signedUploadUrl(THUMBS, base),
+      // The cutout lives in the thumbs bucket: it is wall material, sized for walls, and law 7
+      // keeps everything a wall touches inside that bucket.
+      cutoutUploadUrl: await signedUploadUrl(THUMBS, cutout),
     };
   },
 
@@ -359,6 +380,40 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
   async "photo.confirm"(ctx) {
     operatorEvent(ctx);
     return one(await rpc("api_confirm_photo", { p_photo_id: ctx.body.photoId }));
+  },
+
+  /** Queues the restyle for a captured photo. Idempotent in the database: a partial unique
+   *  index converges a replayed enqueue on the existing job, so a retrying outbox cannot
+   *  start a second paid generation (laws 1 and 4). */
+  async "photo.enqueue"(ctx) {
+    const { operatorId, eventId } = operatorEvent(ctx);
+    return one(await rpc("api_enqueue_job", {
+      p_event_id: eventId, p_photo_id: ctx.body.photoId, p_operator_id: operatorId,
+    }));
+  },
+
+  /** Records a device-produced cutout. Absence is the designed fallback, never an error. */
+  async "photo.setCutout"(ctx) {
+    operatorEvent(ctx);
+    return one(await rpc("api_set_photo_cutout", {
+      p_photo_id: ctx.body.photoId, p_cutout_path: ctx.body.cutoutPath,
+    }));
+  },
+
+  /** Client telemetry lands in the capped, deduped, per-device store from law 3. A station
+   *  reporting its own errors goes through the same arithmetic ceiling as everything else. */
+  async "ops.report"(ctx) {
+    const { eventId } = operatorEvent(ctx);
+    await rpc("record_op", {
+      p_service: String(ctx.body.service ?? "station").slice(0, 40),
+      p_event: String(ctx.body.event ?? "error").slice(0, 60),
+      p_ok: Boolean(ctx.body.ok ?? false),
+      p_ms: ctx.body.ms ?? null,
+      p_event_id: eventId,
+      p_meta: { code: String(ctx.body.code ?? "").slice(0, 60), error: String(ctx.body.error ?? "").slice(0, 200) },
+      p_device_id: String(ctx.body.deviceId ?? "unknown").slice(0, 80),
+    });
+    return { recorded: true };
   },
 
   async "booth.feed"(ctx) {
@@ -419,6 +474,7 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       kind: r.kind,
       createdAt: r.created_at,
       thumbUrl: r.thumb_path ? await signedReadUrl(THUMBS, r.thumb_path, 3600) : null,
+      cutoutUrl: r.cutout_path ? await signedReadUrl(THUMBS, r.cutout_path, 3600) : null,
     })));
   },
 
@@ -432,6 +488,7 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       photoId: r.photo_id,
       kind: r.kind,
       thumbUrl: r.thumb_path ? await signedReadUrl(THUMBS, r.thumb_path, 3600) : null,
+      cutoutUrl: r.cutout_path ? await signedReadUrl(THUMBS, r.cutout_path, 3600) : null,
     })));
   },
 

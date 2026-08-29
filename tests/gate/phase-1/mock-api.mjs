@@ -17,6 +17,8 @@ import { createServer } from "node:http";
 const photos = new Map();          // photoId -> row
 const registerCalls = [];          // every register attempt, including duplicates
 const uploads = new Map();         // path -> bytes
+const cutouts = new Map();         // photoId -> cutoutPath
+const enqueues = [];               // photoIds whose restyle was queued
 let failUntil = 0;                 // simulated server-side outage
 
 // Wall-under-test state, mutated via /__test/wall. The mock mirrors the real semantics the
@@ -61,6 +63,9 @@ const server = createServer(async (req, res) => {
       registerCalls: registerCalls.length,
       confirmed: [...photos.values()].filter((p) => p.status === "ready").length,
       uploads: uploads.size,
+      cutouts: [...cutouts.entries()],
+      cutoutUploads: [...uploads.keys()].filter((k) => k.startsWith("/upload/c/")).length,
+      enqueues: [...enqueues],
     });
   }
   if (url.pathname === "/__test/outage") {
@@ -69,6 +74,7 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/__test/reset") {
     photos.clear(); registerCalls.length = 0; uploads.clear(); failUntil = 0;
+    cutouts.clear(); enqueues.length = 0;
     wall.photoCount = 0; wall.panic = false; wall.frozen = false;
     return json(res, 200, { ok: true });
   }
@@ -123,10 +129,25 @@ const server = createServer(async (req, res) => {
           photoId: body.photoId,
           storagePath: `ev-1/${body.photoId}.jpg`,
           thumbPath: `ev-1/${body.photoId}.jpg`,
+          cutoutPath: `ev-1/${body.photoId}.cutout.png`,
           originalUploadUrl: `http://localhost:${PORT}/upload/o/${body.photoId}`,
           thumbUploadUrl: `http://localhost:${PORT}/upload/t/${body.photoId}`,
+          cutoutUploadUrl: `http://localhost:${PORT}/upload/c/${body.photoId}`,
         },
       });
+
+    case "photo.enqueue": {
+      enqueues.push(body.photoId);
+      return json(res, 200, { ok: true, data: { id: `job-${body.photoId}`, status: "queued" } });
+    }
+
+    case "photo.setCutout": {
+      cutouts.set(body.photoId, body.cutoutPath);
+      return json(res, 200, { ok: true, data: { id: body.photoId, cutout_path: body.cutoutPath } });
+    }
+
+    case "ops.report":
+      return json(res, 200, { ok: true, data: { recorded: true } });
 
     case "photo.register": {
       registerCalls.push(body.photoId);
