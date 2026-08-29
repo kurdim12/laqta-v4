@@ -390,3 +390,97 @@ phase 1 (2 passed), phase 2 (3 passed), phase 3 (2 passed), phase 4 (4 passed).
 Phase 5 — guest modes & delivery: the three per-event guest modes (wall-only ·
 code-per-shot · full registration), gallery by code with downloads, WhatsApp/SMS share.
 Gate: each mode end to end on one event without touching another event's config.
+
+---
+
+# Phase 5 — Guest modes & delivery · **GATE GREEN (116/116 SQL + 4/4 browser)**
+
+## 1. What was built
+
+**The three guest modes, enforced where they cannot be bypassed (feature H, law 5).**
+Migration 0025 turned `guest_mode` from a label into a shape: a photo-bound code can only
+exist under `code_per_shot`, a guest-bound code only under `registration`, an unbound code
+not at all, and a wall-only event can mint nothing — the database refuses, whatever any
+client sends. Re-minting a shot returns its existing live code (one shot, one code), and
+registration now consumes a per-client database-backed platform limit BEFORE writing
+anything: laws 11 and 12 applied to the write side, not just the read side. Migration 0024
+restated the Phase 0 gate first (its gate event now declares the mode its minting checks
+always assumed — every check unchanged), because the enforcement rightly broke a gate that
+predated modes; the failed first apply rolled back whole, which is the migration system
+working.
+
+**Code-per-shot at the booth.** In this mode every ready shot in the booth feed grows a
+"Code" button; one tap shows a hand-over screen — the 14-symbol code, huge, plus a QR of the
+gallery link — rendered entirely on the device by a bundled encoder, so the operator can hand
+a guest their code while the venue's internet is down.
+
+**Registration at the kiosk.** The kiosk leads with a bilingual form (name, optional phone,
+explicit consent — recorded as a timestamp, with a retention date, not implied). The guest
+registers once, then every shot they take binds to them AT THE SHUTTER: the guest id rides
+the outbox, so a registered guest keeps collecting shots straight through an outage (law 1
+untouched). The farewell screen hands over their code and QR; "next guest" holds nothing.
+A guest can also register from their own phone at `#/g/<event>`.
+
+**Gallery and delivery.** The gallery accepts `#/guest?code=…` so a scanned QR opens itself;
+downloads sign the original for one object, one hour (the single place originals are ever
+signed). Delivery is the sending path every guest already carries: WhatsApp and SMS share
+links with the gallery URL prefilled, plus copy-link — nothing to configure, nothing that can
+be unconfigured.
+
+**Feature A closed out (migration 0026 + API v7).** The admin console gained the full
+branding panel — bilingual names, default language, brand colors, logo upload through a
+signed URL — and the lifecycle buttons (go live / archive). The public event shape now
+carries the logo path so walls render the logo in brand cells and on the panic screen; the
+printable QR kit lives at `#/qr/<event>` (guest / wall / kiosk QRs, print button). The gate
+proves the lifecycle (nothing backwards from live, archived terminal) and re-proves that
+widening the public shape leaked no AI config.
+
+**One new dependency**, recorded: `qrcode` (MIT) renders QR codes locally to a canvas. It is
+bundled — no network involved in showing a code.
+
+## 2. The gate, shown passing
+
+**Browser (4/4):** a wall-only event's guest page offers nothing to type; code-per-shot runs
+its full journey (mint at booth → QR shown → guest types code → gallery with download →
+WhatsApp/SMS hrefs carrying the gallery link); registration runs its full journey (kiosk
+form → shot bound to the guest at the shutter, verified in the stored row → farewell code →
+"next guest" resets → scanned deep link opens the gallery); three modes side by side serve
+three different behaviours with zero leakage.
+
+**Deterministic suite (116/116):** the twenty new checks — wall-only minting refused,
+registration refused off-mode, unbound codes impossible, code alphabet correct, re-mint
+converges, lookup resolves to its event and mode, gallery holds exactly the coded shot, the
+publish gate holds even against a photo's own code, consent and retention recorded, capture
+binding reaches the gallery, cross-event guest binding refused by the composite key,
+registration rate-limited before anything is written, the branding/lifecycle checks — all
+green, alongside every check from phases 0–4. Live production check: the demo event
+(wall-only) answered `mode_refused` to a real registration attempt through the deployed API.
+
+## 3. Which ledger numbers this touches
+
+Law 11 now covers the unauthenticated WRITE side (registration charged before insert). Law 5
+re-proven twice (mode isolation across events; cross-event guest binding refused by
+construction). Law 1 extended through the guest binding (rides the outbox). The publish gate
+(feature E) proven against guest codes. No law regressed: the full suite re-ran inside every
+migration apply — 0025's first attempt was refused by exactly that mechanism.
+
+## 4. Regression line
+
+`run_all_gates()`: **116/116** on the live database. Browser gates re-run after every
+frontend change: phase 1 (2), phase 2 (3), phase 3 (2), phase 4 (4), phase 5 (4) — all
+passing.
+
+## 5. Debt and owner-hands, recorded
+
+- The branding-logo debt from Phase 3 is paid (panel, upload, wall rendering, gate).
+- Still owed before freeze: the worker's generated-image thumbnail resize pass.
+- Owner-hands checklist unchanged: OpenRouter key (paid restyles), Anam keys (avatar,
+  Phase 6), the dress rehearsal.
+
+## 6. Next
+
+Phase 6 — the revived five: vogue editorial flow as a selectable style, shirt-picker kiosk
+into the same approval queue, show cues + crew tasks UI in the control room, avatar kiosk
+with its full degradation ladder (honest fallback until Anam keys — law 8), and guest
+delivery is already live from this phase. Gate: each wired into the same approval queue and
+flag system; avatar shows honest configured/missing state.

@@ -11,6 +11,8 @@ export interface PublicEvent {
   slug: string; name: string; name_ar?: string | null; name_en?: string | null;
   status: string; locale_default: string; locales: string[];
   brand_primary: string; brand_secondary: string; brand_font_family?: string | null;
+  /** Signed by the API layer when the event has a logo; walls render it in brand cells. */
+  brand_logo_url?: string | null;
   wall_frozen: boolean; panic_brand_only: boolean;
   banner_active: boolean; banner_text_en?: string | null; banner_text_ar?: string | null;
   guest_mode: string; wall_config: Record<string, unknown> | null;
@@ -85,6 +87,10 @@ export function PanicScreen({ event, title }: { event: PublicEvent; title: strin
   return (
     <div className="wall-empty" style={{ color: event.brand_primary }}>
       <div style={{ textAlign: "center" }}>
+        {event.brand_logo_url ? (
+          <img src={event.brand_logo_url} alt="" style={{ maxWidth: "40vw", maxHeight: "30vh",
+                                                          marginBlockEnd: 16 }} />
+        ) : null}
         <div style={{ fontSize: "3rem", fontWeight: 700 }}>{title || t.appName}</div>
         <div style={{ marginBlockStart: 12, fontSize: "1rem" }}>{t.wallPanicNotice}</div>
       </div>

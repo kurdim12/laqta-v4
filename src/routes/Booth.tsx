@@ -7,6 +7,7 @@ import { useSession } from "../state/useSession";
 import { deviceId } from "../api/photo";
 import { enqueue, kick, list, needsAttention, startSync, subscribe, type OutboxItem } from "../offline/outbox";
 import { warmCutout } from "../api/cutout";
+import { Qr, galleryLink } from "../components/Qr";
 
 interface FeedRow {
   id: string;
@@ -23,6 +24,8 @@ export default function Booth() {
   const [feed, setFeed] = useState<FeedRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [restyle, setRestyle] = useState(false);
+  const [guestMode, setGuestMode] = useState<string>("wall_only");
+  const [shownCode, setShownCode] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const queueRef = useRef<OutboxItem[]>([]);
   queueRef.current = queue;
@@ -39,6 +42,29 @@ export default function Booth() {
     void list().then(setQueue);
     return () => { stopSync(); unsubscribe(); };
   }, []);
+
+  // The guest mode decides whether this booth hands out codes. It is read once per session;
+  // the database re-checks it on every mint, so a stale read can only hide the button, never
+  // mint a code the mode forbids.
+  useEffect(() => {
+    if (!session?.eventSlug) return;
+    call<{ guest_mode?: string } | null>("event.get", { slug: session.eventSlug })
+      .then((e) => setGuestMode(e?.guest_mode ?? "wall_only"))
+      .catch(() => { /* stays wall_only: no button, nothing lost */ });
+  }, [session?.eventSlug]);
+
+  async function mintCode(photoId: string) {
+    try {
+      const row = await call<{ code: string } | null>("photo.mintCode", { photoId });
+      if (row?.code) setShownCode(row.code);
+    } catch (err) {
+      const code = err instanceof ApiError ? err.code : "";
+      setError(code === "MODE_REFUSES_PHOTO_CODE"
+        ? t.modeNoCodes
+        : (err instanceof ApiError && err.isOffline ? t.needConnection
+           : messageFor(code, t as unknown as Record<string, string>)));
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -162,11 +188,38 @@ export default function Booth() {
                 <span className="muted" style={{ fontSize: ".78rem" }}>
                   {new Date(p.created_at).toLocaleTimeString()}
                 </span>
+                {guestMode === "code_per_shot" && p.status === "ready" ? (
+                  <button className="ghost" data-mint={p.id}
+                          onClick={() => void mintCode(p.id)}>
+                    {t.showCode}
+                  </button>
+                ) : null}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      {shownCode ? (
+        // The hand-over screen: the operator turns the tablet, the guest scans or reads the
+        // code. Rendered locally, so it works while the venue's internet is down.
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 40, background: "var(--bg)",
+                   display: "flex", flexDirection: "column", alignItems: "center",
+                   justifyContent: "center", gap: 16, padding: 24 }}
+        >
+          <h2 style={{ margin: 0 }}>{t.yourCode}</h2>
+          <p className="muted" style={{ margin: 0 }}>{t.codeReady}</p>
+          <p data-code={shownCode}
+             style={{ fontFamily: "ui-monospace, monospace", fontSize: "1.8rem",
+                      letterSpacing: ".16em", margin: 0, overflowWrap: "anywhere",
+                      textAlign: "center" }}>
+            {shownCode}
+          </p>
+          <Qr value={galleryLink(shownCode)} size={260} />
+          <button className="primary" onClick={() => setShownCode(null)}>{t.close}</button>
+        </div>
+      ) : null}
     </Shell>
   );
 }

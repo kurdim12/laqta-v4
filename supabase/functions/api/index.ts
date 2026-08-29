@@ -179,6 +179,19 @@ function operatorEvent(ctx: Ctx): { operatorId: string; eventId: string } {
   return { operatorId: s.id, eventId: s.eventId! };
 }
 
+/** Resolves an event slug to its id, with the service role, inside this one surface. The
+ *  public event shape (api_event_public) carries no id on purpose; a guest registering from
+ *  their own phone still has to name the event somehow, and the slug is all they hold. */
+async function eventIdBySlug(slug: string): Promise<string | null> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/events?select=id&slug=eq.${encodeURIComponent(slug)}&limit=1`,
+    { headers: { "apikey": SERVICE_KEY, "Authorization": `Bearer ${SERVICE_KEY}` } },
+  );
+  if (!res.ok) throw new ApiError("DB_ERROR", 500);
+  const rows = (await res.json()) as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
+}
+
 const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
   async ping() {
     return { ok: true, service: "laqta-v3-api" };
@@ -252,9 +265,35 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
   },
 
   /** Public: what a wall or guest surface may know. Calls api_event_public, whose return
-   *  type structurally cannot name the AI prompt, budgets or spend. */
+   *  type structurally cannot name the AI prompt, budgets or spend. The logo is signed here;
+   *  a logo that fails to sign costs the wall its logo, never its event. */
   async "event.get"({ body }) {
-    return one(await rpc("api_event_public", { p_event_slug: body.slug }));
+    const row = one<any>(await rpc("api_event_public", { p_event_slug: body.slug }));
+    if (row?.brand_logo_path) {
+      row.brand_logo_url = await signedReadUrl(THUMBS, row.brand_logo_path, 3600)
+        .catch(() => null);
+    }
+    return row;
+  },
+
+  /** Admin only: the event lifecycle. draft -> live -> archived; the database's trigger
+   *  refuses everything else, so this action cannot be talked into going backwards. */
+  async "event.status"(ctx) {
+    requireAdmin(ctx);
+    return one(await rpc("api_update_event", {
+      p_slug: ctx.body.slug, p_name: null, p_ai_prompt: null, p_ai_model: null,
+      p_max_generations: null, p_status: ctx.body.status, p_wall_config: null,
+    }));
+  },
+
+  /** Admin only: a signed target for the event's logo. Timestamped path, so replacing a logo
+   *  is a new object and every wall's cache moves on with it. */
+  async "event.brandingUploadUrl"(ctx) {
+    requireAdmin(ctx);
+    const eventId = String(ctx.body.eventId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(eventId)) throw new ApiError("BAD_EVENT_ID", 400);
+    const path = `${eventId}/brand/logo-${Date.now()}.png`;
+    return { path, uploadUrl: await signedUploadUrl(THUMBS, path) };
   },
 
   /** Admin only: the LED/lightbox layout, a per-event setting like every other (law 5). */
@@ -374,6 +413,24 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       p_client_captured_at: ctx.body.clientCapturedAt ?? null,
       p_capture_source: ctx.body.captureSource ?? "booth",
       p_restyle_intent: ctx.body.restyleIntent ?? "straight",
+      // Registration mode: a kiosk that registered its guest binds their shots at capture.
+      // The composite foreign key refuses a guest from any other event.
+      p_guest_id: ctx.body.guestId ?? null,
+    }));
+  },
+
+  /** One shot, one code (code_per_shot mode). The database refuses this under any other
+   *  guest mode, and a retry returns the shot's existing live code rather than a second
+   *  one — the operator's button is idempotent the way every capture write is. */
+  async "photo.mintCode"(ctx) {
+    const isAdmin = ctx.session?.kind === "admin";
+    const eventId = isAdmin ? ctx.body.eventId : operatorEvent(ctx).eventId;
+    return one(await rpc("api_mint_guest_code", {
+      p_event_id: eventId,
+      p_photo_id: ctx.body.photoId,
+      p_guest_id: null,
+      p_issued_by: isAdmin ? null : ctx.session!.id,
+      p_ttl_hours: 720,
     }));
   },
 
@@ -533,6 +590,33 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
   },
 
   /* --------------------------------------------------------------------- guests (H, 11) */
+
+  /** Registration mode: creates the guest and their gallery code. Works from an armed kiosk
+   *  (the operator session names the event) or from the guest's own phone (by event slug).
+   *  The database refuses any event whose mode is not 'registration', and consumes a
+   *  per-client platform limit BEFORE writing anything — laws 11 and 12 on the write side. */
+  async "guest.register"(ctx) {
+    let eventId: string | null;
+    if (ctx.session?.kind === "operator") {
+      eventId = operatorEvent(ctx).eventId;
+    } else {
+      const slug = String(ctx.body.slug ?? "").trim();
+      if (!slug) throw new ApiError("BAD_SLUG", 400);
+      eventId = await eventIdBySlug(slug);
+      if (!eventId) return { outcome: "not_found" };
+    }
+    return one(await rpc("api_register_guest", {
+      p_event_id: eventId,
+      p_display_name: ctx.body.displayName ?? null,
+      p_phone: ctx.body.phone ?? null,
+      p_email: ctx.body.email ?? null,
+      p_locale: ctx.body.locale ?? "ar",
+      p_consent: Boolean(ctx.body.consent),
+      p_retain_days: 90,
+      p_client: ctx.clientKey,
+      p_limit: 10,
+    }));
+  },
 
   async "guest.lookup"({ body, clientKey }) {
     return one(await rpc("api_guest_lookup", {

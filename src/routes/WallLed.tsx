@@ -101,7 +101,10 @@ export default function WallLed() {
               return (
                 <div key={cell} className="led-brand"
                      style={{ background: event?.brand_primary ?? "#111" }}>
-                  <span>{title || t.appName}</span>
+                  {event?.brand_logo_url
+                    ? <img src={event.brand_logo_url} alt=""
+                           style={{ maxWidth: "70%", maxHeight: "70%", objectFit: "contain" }} />
+                    : <span>{title || t.appName}</span>}
                 </div>
               );
             }

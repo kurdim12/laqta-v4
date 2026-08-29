@@ -55,6 +55,11 @@ export default function Admin() {
   const [aiBudget, setAiBudget] = useState("");
   const [aiEst, setAiEst] = useState("0.04");
   const [aiMax, setAiMax] = useState(1000);
+  const [brandNameEn, setBrandNameEn] = useState("");
+  const [brandNameAr, setBrandNameAr] = useState("");
+  const [brandLocale, setBrandLocale] = useState("ar");
+  const [brandPrimary, setBrandPrimary] = useState("#e8c07a");
+  const [brandSecondary, setBrandSecondary] = useState("#111111");
 
   const event = events.find((e) => e.id === selected) ?? null;
 
@@ -94,6 +99,25 @@ export default function Admin() {
     setAiBudget(ev?.ai_budget_usd != null ? String(ev.ai_budget_usd) : "");
     setAiEst(ev?.ai_est_cost_usd != null ? String(ev.ai_est_cost_usd) : "0.04");
     setAiMax(ev?.max_generations ?? 1000);
+  }, [selected, events]);
+
+  // The branding form always shows what the event actually has; the public shape is the one
+  // source that carries the bilingual names and colors.
+  useEffect(() => {
+    const ev = events.find((e) => e.id === selected);
+    if (!ev) return;
+    call<{ name_en?: string | null; name_ar?: string | null; locale_default?: string;
+           brand_primary?: string | null; brand_secondary?: string | null } | null>(
+      "event.get", { slug: ev.slug })
+      .then((p) => {
+        if (!p) return;
+        setBrandNameEn(p.name_en ?? "");
+        setBrandNameAr(p.name_ar ?? "");
+        setBrandLocale(p.locale_default ?? "ar");
+        setBrandPrimary(p.brand_primary ?? "#e8c07a");
+        setBrandSecondary(p.brand_secondary ?? "#111111");
+      })
+      .catch(() => { /* the form keeps its last values; saving still round-trips */ });
   }, [selected, events]);
 
   async function run(fn: () => Promise<unknown>, okMessage?: string) {
@@ -163,10 +187,118 @@ export default function Admin() {
           <h2>{t.switches} — {event.name}</h2>
           <p className="muted" style={{ fontSize: ".85rem", marginBlockStart: -4 }}>
             {t.wallGrid}: #/wall/{event.slug} · {t.wallLed}: #/wall/{event.slug}/led ·{" "}
-            {t.wallLightbox}: #/wall/{event.slug}/lightbox · {event.generations_used}/{event.max_generations} ·
+            {t.wallLightbox}: #/wall/{event.slug}/lightbox · {t.qrKit}: #/qr/{event.slug} ·{" "}
+            {event.generations_used}/{event.max_generations} ·
             ${Number(event.ai_spend_usd).toFixed(2)}
             {event.ai_budget_usd ? ` / $${Number(event.ai_budget_usd).toFixed(2)}` : ""}
           </p>
+
+          <div className="row" style={{ alignItems: "center" }}>
+            <label style={{ margin: 0 }}>
+              <span>{t.guestModeLabel}</span>
+              <select
+                style={{ maxWidth: 200 }}
+                value={event.guest_mode}
+                disabled={busy}
+                onChange={(e) =>
+                  void run(() => call("event.branding", {
+                    eventId: event.id, guestMode: e.target.value,
+                  }), t.saved)
+                }
+              >
+                <option value="wall_only">{t.modeWallOnly}</option>
+                <option value="code_per_shot">{t.modeCodePerShot}</option>
+                <option value="registration">{t.modeRegistration}</option>
+              </select>
+            </label>
+            {event.status === "draft" ? (
+              <button className="primary" disabled={busy}
+                      onClick={() => void run(() => call("event.status", {
+                        slug: event.slug, status: "live",
+                      }), t.saved)}>
+                {t.goLive}
+              </button>
+            ) : null}
+            {event.status !== "archived" ? (
+              <button disabled={busy}
+                      onClick={() => {
+                        // Archived is terminal in the database; make the tap mean it.
+                        if (window.confirm(`${t.archiveEvent}: ${event.name}?`)) {
+                          void run(() => call("event.status", {
+                            slug: event.slug, status: "archived",
+                          }), t.saved);
+                        }
+                      }}>
+                {t.archiveEvent}
+              </button>
+            ) : null}
+          </div>
+
+          <h2>{t.branding}</h2>
+          <form
+            className="row"
+            onSubmit={(ev) => {
+              ev.preventDefault();
+              void run(() => call("event.branding", {
+                eventId: event.id,
+                nameEn: brandNameEn || null,
+                nameAr: brandNameAr || null,
+                localeDefault: brandLocale,
+                brandPrimary, brandSecondary,
+              }), t.saved);
+            }}
+          >
+            <label style={{ margin: 0 }}>
+              <span>{t.nameEnLabel}</span>
+              <input style={{ maxWidth: 200 }} value={brandNameEn}
+                     onChange={(e) => setBrandNameEn(e.target.value)} />
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.nameArLabel}</span>
+              <input style={{ maxWidth: 200 }} dir="rtl" value={brandNameAr}
+                     onChange={(e) => setBrandNameAr(e.target.value)} />
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.localeDefaultLabel}</span>
+              <select style={{ maxWidth: 110 }} value={brandLocale}
+                      onChange={(e) => setBrandLocale(e.target.value)}>
+                <option value="ar">العربية</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.brandPrimaryLabel}</span>
+              <input type="color" style={{ maxWidth: 70, padding: 2, height: 38 }} value={brandPrimary}
+                     onChange={(e) => setBrandPrimary(e.target.value)} />
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.brandSecondaryLabel}</span>
+              <input type="color" style={{ maxWidth: 70, padding: 2, height: 38 }} value={brandSecondary}
+                     onChange={(e) => setBrandSecondary(e.target.value)} />
+            </label>
+            <label style={{ margin: 0 }}>
+              <span>{t.brandLogo}</span>
+              <input type="file" accept="image/*" style={{ maxWidth: 230 }}
+                     onChange={(e) => {
+                       const f = e.target.files?.[0];
+                       e.target.value = "";
+                       if (!f) return;
+                       void run(async () => {
+                         const target = await call<{ path: string; uploadUrl: string }>(
+                           "event.brandingUploadUrl", { eventId: event.id });
+                         const res = await fetch(target.uploadUrl, {
+                           method: "PUT",
+                           headers: { "Content-Type": f.type || "image/png" },
+                           body: f,
+                         });
+                         if (!res.ok) throw new Error(`UPLOAD_${res.status}`);
+                         await call("event.branding", { eventId: event.id, brandLogoPath: target.path });
+                       }, t.saved);
+                     }} />
+            </label>
+            <button className="primary" type="submit" disabled={busy}
+                    style={{ alignSelf: "end" }}>{t.save}</button>
+          </form>
           <div className="row">
             {SWITCHES.map((s) => {
               const on = Boolean((event as unknown as Record<string, boolean>)[s.field]);

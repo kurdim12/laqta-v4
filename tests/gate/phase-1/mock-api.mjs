@@ -21,6 +21,20 @@ const cutouts = new Map();         // photoId -> cutoutPath
 const enqueues = [];               // photoIds whose restyle was queued
 const stations = new Map();        // deviceId -> {kind,label,depth,last}
 const placements = new Map();      // cellIndex -> photoId
+const modes = new Map();           // slug -> guest_mode (default wall_only, as in 0012)
+const guests = new Map();          // guestId -> {name, consent}
+const codes = new Map();           // code -> {photoId|null, guestId|null}
+let lastLoginSlug = "ev-1";        // the mock's stand-in for the operator session's event
+
+// 32 symbols, no I/L/O/U — the same alphabet generate_guest_code uses, so the frontend's
+// 14-character expectations are tested against codes shaped like the real ones.
+const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+function mintCode() {
+  let c = "";
+  for (let i = 0; i < 14; i++) c += ALPHABET[Math.floor(Math.random() * 32)];
+  return c;
+}
+function modeOf(slug) { return modes.get(slug) ?? "wall_only"; }
 const switches = { wallFrozen: false, panicBrandOnly: false, intakePaused: false, aiPaused: false, bannerActive: false, bannerTextEn: null, bannerTextAr: null };
 const STATION_OFFLINE_MS = 8000;   // mirrors the per-event threshold 0023 defaults to
 let failUntil = 0;                 // simulated server-side outage
@@ -66,6 +80,8 @@ const server = createServer(async (req, res) => {
       photoCount: photos.size,
       registerCalls: registerCalls.length,
       confirmed: [...photos.values()].filter((p) => p.status === "ready").length,
+      guests: [...guests.entries()],
+      codes: [...codes.entries()],
       uploads: uploads.size,
       cutouts: [...cutouts.entries()],
       cutoutUploads: [...uploads.keys()].filter((k) => k.startsWith("/upload/c/")).length,
@@ -76,9 +92,14 @@ const server = createServer(async (req, res) => {
     failUntil = Date.now() + Number(url.searchParams.get("ms") || 0);
     return json(res, 200, { ok: true, failUntil });
   }
+  if (url.pathname === "/__test/mode") {
+    modes.set(url.searchParams.get("slug"), url.searchParams.get("mode"));
+    return json(res, 200, { ok: true, modes: [...modes.entries()] });
+  }
   if (url.pathname === "/__test/reset") {
     photos.clear(); registerCalls.length = 0; uploads.clear(); failUntil = 0;
     cutouts.clear(); enqueues.length = 0; stations.clear(); placements.clear();
+    modes.clear(); guests.clear(); codes.clear(); lastLoginSlug = "ev-1";
     Object.assign(switches, { wallFrozen: false, panicBrandOnly: false, intakePaused: false,
                               aiPaused: false, bannerActive: false, bannerTextEn: null, bannerTextAr: null });
     wall.photoCount = 0; wall.panic = false; wall.frozen = false;
@@ -128,6 +149,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { ok: true, data: { ok: true } });
 
     case "operator.login":
+      lastLoginSlug = body.eventSlug || "ev-1";
       return json(res, 200, {
         ok: true,
         data: {
@@ -175,6 +197,7 @@ const server = createServer(async (req, res) => {
           id: body.photoId, status: "processing", approved: false,
           device_id: body.deviceId, restyle_intent: body.restyleIntent,
           capture_source: body.captureSource ?? "booth",
+          guest_id: body.guestId ?? null,
           client_captured_at: body.clientCapturedAt,
           created_at: new Date().toISOString(),
         });
@@ -281,9 +304,66 @@ const server = createServer(async (req, res) => {
           brand_primary: "#e8c07a", brand_secondary: "#111111", brand_font_family: null,
           wall_frozen: wall.frozen, panic_brand_only: wall.panic,
           banner_active: false, banner_text_en: null, banner_text_ar: null,
-          guest_mode: "wall_only", wall_config: wall.config,
+          guest_mode: modeOf(body.slug), wall_config: wall.config,
         },
       });
+
+    /* ---- guests: the same contract 0025 enforces, minus nothing the frontend can see ---- */
+
+    case "guest.register": {
+      const slug = body.slug || lastLoginSlug;
+      if (modeOf(slug) !== "registration") {
+        return json(res, 200, { ok: true, data: { outcome: "mode_refused", guest_id: null, code: null } });
+      }
+      const guestId = crypto.randomUUID();
+      guests.set(guestId, { name: body.displayName ?? null, consent: Boolean(body.consent) });
+      const code = mintCode();
+      codes.set(code, { photoId: null, guestId });
+      return json(res, 200, { ok: true, data: { outcome: "ok", guest_id: guestId, code } });
+    }
+
+    case "photo.mintCode": {
+      if (modeOf(lastLoginSlug) !== "code_per_shot") {
+        return json(res, 404, { ok: false, error: "MODE_REFUSES_PHOTO_CODE" });
+      }
+      // One shot, one code: a re-mint converges on the existing credential, like the real DB.
+      for (const [code, c] of codes) if (c.photoId === body.photoId) {
+        return json(res, 200, { ok: true, data: { id: code, code, expires_at: null } });
+      }
+      const code = mintCode();
+      codes.set(code, { photoId: body.photoId, guestId: null });
+      return json(res, 200, { ok: true, data: { id: code, code, expires_at: null } });
+    }
+
+    case "guest.lookup": {
+      const c = codes.get(String(body.code ?? "").toUpperCase());
+      return json(res, 200, {
+        ok: true,
+        data: c
+          ? { outcome: "ok", event_slug: lastLoginSlug, guest_mode: modeOf(lastLoginSlug) }
+          : { outcome: "not_found" },
+      });
+    }
+
+    case "guest.photos": {
+      const c = codes.get(String(body.code ?? "").toUpperCase());
+      if (!c) return json(res, 200, { ok: true, data: { outcome: "not_found", photos: [] } });
+      // The publish gate applies to guests too: approved and ready, nothing else.
+      const mine = [...photos.values()].filter((p) =>
+        (c.photoId ? p.id === c.photoId : p.guest_id === c.guestId)
+        && p.status === "ready" && Boolean(p.approved));
+      return json(res, 200, {
+        ok: true,
+        data: {
+          outcome: "ok",
+          photos: mine.map((p) => ({
+            id: p.id, createdAt: p.created_at,
+            thumbUrl: `http://localhost:${PORT}/thumb/${p.id}`,
+            downloadUrl: `http://localhost:${PORT}/thumb/${p.id}?full=1`,
+          })),
+        },
+      });
+    }
 
     case "wall.photos": {
       if (wall.panic) return json(res, 200, { ok: true, data: [] });
