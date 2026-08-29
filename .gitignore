@@ -47,3 +47,5 @@ blob-report/
 
 # The packaged deploy artifact — produced fresh by `npm run build`, never committed
 laqta-v3-dist.zip
+laqta-v3-app.zip
+laqta-v3-models-*.zip
