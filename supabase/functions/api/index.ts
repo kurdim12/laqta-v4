@@ -252,6 +252,31 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     }));
   },
 
+  /** Law 6 made repairable. Until 0031 the database could rotate a PIN and nothing could ask
+   *  it to: no action, no UI. A credential that leaks mid-event has to be replaceable from a
+   *  phone, by the owner, in seconds - so this is the one API action whose absence was itself
+   *  the vulnerability. The new PIN is never logged; the audit records only who changed it. */
+  async "operator.setPin"(ctx) {
+    const admin = requireAdmin(ctx);
+    await rpc("api_set_operator_pin", {
+      p_operator_id: ctx.body.operatorId,
+      p_pin: String(ctx.body.pin ?? ""),
+      p_admin_id: admin.id,
+    });
+    return { rotated: true };
+  },
+
+  /** Retires or restores an operator account. verify_operator has required active = true
+   *  since 0011, so this genuinely revokes rather than merely hiding a row. */
+  async "operator.setActive"(ctx) {
+    const admin = requireAdmin(ctx);
+    return one(await rpc("api_set_operator_active", {
+      p_operator_id: ctx.body.operatorId,
+      p_active: Boolean(ctx.body.active),
+      p_admin_id: admin.id,
+    }));
+  },
+
   /* --------------------------------------------------------------- events and setup (A) */
 
   async "event.create"(ctx) {

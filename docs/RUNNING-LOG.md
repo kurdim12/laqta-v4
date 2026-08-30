@@ -690,3 +690,96 @@ venue, which is item 4 on his checklist. Everything is ready for it.
 
 Nothing in this build waits on any of them. Items 2 and 3 light up extra capability; without
 them those features run in honest, designed fallback, which is what law 8 asks for.
+
+---
+
+# Post-freeze audit — **three blockers found, two fixed, one waiting on the owner**
+
+Before declaring the build finished, eight independent audits ran over the repo and the live
+database — scope against the approved feature list, the 14 laws, test coverage,
+never-run-in-production paths, code correctness, bilingual/RTL compliance, deployment drift,
+and whether the documents tell the truth — with every claimed gap adversarially verified by a
+separate reviewer. 125 findings were raised; 116 survived verification. Nine were refuted or
+already handled.
+
+## What the audit found that the gate suite could not
+
+**Law 6 had a hole its own checks were shaped not to see.** Migration 0029 gave
+`seed_demo_event` a parameter default of `'2468'` — a constant credential, in a public
+repository, readable from `pg_proc`, and the live PIN on both live events. The two law-6
+checks passed throughout because they asked "is it stored as a bcrypt hash" and "does any
+function return a credential". Neither asked whether one is *readable*. This is the second
+time this shape has appeared (law 9's anon check counted only the `public` schema), and it is
+worth naming as a pattern: **a check that tests the mechanism you built will not find the
+mechanism you forgot.**
+
+Worse, nothing could repair it. `api_set_operator_pin` and `api_set_admin_password` have
+existed since 0008 and 0011 and were reachable from no API action and no UI, and there was no
+way to deactivate an operator at all. A PIN that leaked at 21:00 worked for the rest of the
+event, permanently.
+
+**Every browser gate runs against a mock.** All 20, phases 1 through 7 including the dress
+rehearsal, drive `tests/gate/phase-1/mock-api.mjs` rather than the deployed backend. This is
+disclosed in `tests/gate/README.md`, `RUNBOOK.md` and `docs/api-layer.md` — and nowhere in
+this log, whose phase reports read as though they were observed on real infrastructure. They
+were not. Recording that correction here.
+
+**`storage.objects` is empty, and always has been.** `n_tup_ins = 0` over the project's whole
+history. `signedUploadUrl`, the device PUT and the worker's upload have run zero times in
+production: every photo passes through ~20 lines of plumbing nothing has ever executed.
+
+**The regression suite rewrote the deliverable.** Every `gate:phaseN` ran `build:test`, which
+wrote to the same `dist/` with the API pointed at `localhost:8787`. `dist/` was correct only
+because a production build happened to run last.
+
+## What was fixed in this pass
+
+**Migration 0031 (applied, self-verified, file byte-identical to the applied statement).**
+The seed mints a random six-digit PIN when none is supplied and returns it exactly once
+instead of publishing a constant. Every bcrypt mint site moves from pgcrypto's default cost 6
+to cost 10 (existing hashes keep verifying — bcrypt carries its cost). `api_set_operator_pin`
+gains an admin actor, a minimum length, and an audit record that never contains the new
+credential. `api_set_operator_active` is new, and real: `verify_operator` has required
+`active = true` since 0011. `log_override_admin` finally lets `actor_kind = 'admin'` be
+written, which `audit_log` has allowed since 0010 and nothing could produce.
+
+`gate_credentials()` adds 15 checks asking the four questions the original two did not: is a
+credential *readable*, *rotatable*, *revocable*, and *strong enough*. Two of them are the
+generalised form of this specific defect — no function in `public` may carry a parameter
+default feeding a pin/password/secret/token argument, and the seed's signature must show
+`p_pin DEFAULT NULL`.
+
+**API v9 and the admin console.** `operator.setPin` and `operator.setActive`, admin-only, and
+Change PIN / Deactivate buttons beside the existing Unlock. Verified on the deployed function
+through pg_net: an unauthenticated call answers `403 ADMIN_ONLY`, not `404 UNKNOWN_ACTION`.
+
+**The dist trap.** `build:test` writes to `dist-test`, the gates' static server serves from
+there, and both are gitignored. Verified: after a full seven-phase regression run, `dist/`
+was untouched and `dist-test/` was new. The four-phase-stale zips in the repo root are gone.
+
+**Two migrations that refused to land.** 0031's first attempt tried to give
+`api_create_operator` a `setof operators` return — which would have put `pin_hash` back into a
+return type, the exact thing law 6 forbids. Postgres rejected the return-type change before
+the gate ever ran. The second attempt hit the OUT-parameter shadowing that 0020 fixed once
+before. Both rolled back whole. Recording them because the value of transactional migrations
+that run their own suite is precisely that they catch the author.
+
+## Regression line
+
+`run_all_gates()`: **152/152** on the live database. Browser gates: **20/20**, all seven
+phases, re-run after every change in this pass.
+
+## Still open, and honest about it
+
+- **Both live operators still have the published PIN.** The structural fix landed; the live
+  credential has not been rotated, because those are the credentials the owner was given and
+  changing them silently would lock him out. One tap in the admin console now does it, or one
+  word to me. Until then the exposure stands: the repo is public and the PIN is in its history
+  permanently.
+- **The storage path is still unexercised.** Container egress to the project domain is
+  blocked, so this cannot be closed from here; it needs one real end-to-end shot on the
+  deployed stack.
+- Roughly nineteen should-fix findings remain (signed-URL churn on every wall poll, stale
+  queue-depth closures on three kiosks, four moderation verbs missing an event predicate, no
+  dollar cap on either live event, registration throttling at ~2 guests/minute, the admin
+  being unable to moderate at all). None is a blocker; all are recorded.

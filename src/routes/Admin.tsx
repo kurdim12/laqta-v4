@@ -473,12 +473,36 @@ export default function Admin() {
                   <td>{o.username}</td><td>{o.display_name}</td><td>{o.booth}</td>
                   <td>{o.role === "admin" ? t.roleAdmin : t.roleOperator}</td>
                   <td>
+                    {o.active === false ? <span className="pill warn">{t.inactive}</span> : null}
                     <button className="ghost" disabled={busy}
                             onClick={() => void run(
                               () => call("operator.unlock", { eventId: event.id, username: o.username }),
                               t.unlocked,
                             )}>
                       {t.unlockOperator}
+                    </button>
+                    {/* Law 6 is only a law if a leaked credential can be replaced during the
+                        event, from the phone in the owner's hand. The new PIN is shown to
+                        nobody afterwards - the database keeps a cost-10 hash and the audit
+                        trail keeps only who changed it. */}
+                    <button className="ghost" disabled={busy} data-change-pin={o.username}
+                            onClick={() => {
+                              const next = window.prompt(t.newPinPrompt.replace("{who}", o.username));
+                              if (next === null) return;
+                              if (next.trim().length < 4) { setError(t.pinTooShort); return; }
+                              void run(
+                                () => call("operator.setPin", { operatorId: o.id, pin: next.trim() }),
+                                t.pinRotated,
+                              );
+                            }}>
+                      {t.changePin}
+                    </button>
+                    <button className="ghost" disabled={busy} data-set-active={o.username}
+                            onClick={() => void run(
+                              () => call("operator.setActive", { operatorId: o.id, active: o.active === false }),
+                              o.active === false ? t.operatorReactivated : t.operatorDeactivated,
+                            )}>
+                      {o.active === false ? t.reactivate : t.deactivate}
                     </button>
                   </td>
                 </tr>

@@ -62,7 +62,10 @@ async function signInOnly(page: Page) {
   await page.goto("/#/operator/login");
   await page.getByPlaceholder("lynk-and-co").fill("rehearsal");
   await page.locator('input[autocomplete="username"]').fill("booth1");
-  await page.locator('input[autocomplete="current-password"]').fill("2468");
+  // Any PIN: the browser gates run against tests/gate/phase-1/mock-api.mjs, whose
+  // operator.login accepts anything. A real PIN here would publish a live credential
+  // in a public repository while proving nothing the mock does not already grant.
+  await page.locator('input[autocomplete="current-password"]').fill("000000");
   await page.getByRole("button", { name: /sign in|دخول/i }).click();
   await expect(page, "the session exists before anything navigates away")
     .toHaveURL(/#\/booth/, { timeout: 20_000 });

@@ -4,7 +4,10 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 
-const ROOT = new URL("../../../dist/", import.meta.url).pathname;
+// dist-test, never dist: `npm run build:test` writes here with the API pointed at the
+// local mock, so a regression run can never leave the deliverable in dist/ wired to a
+// server that only exists on this machine.
+const ROOT = new URL("../../../dist-test/", import.meta.url).pathname;
 const PORT = Number(process.env.STATIC_PORT || 8788);
 const TYPES = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
