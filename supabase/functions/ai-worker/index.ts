@@ -14,10 +14,16 @@
 //   never in a way that lets the sweeper hand the job to a second worker while the first
 //   might still be paying for it.
 //
-//   MONEY MOVES BEFORE THE CALL AND SETTLES AFTER. consume_generation books the estimate
-//   before anything is spent (both the count cap and the dollar cap, atomically). Success
-//   settles the estimate against the real cost; every failure refunds it. An event can end
+//   MONEY MOVES BEFORE THE CALL AND SETTLES AFTER. reserve_generation books the estimate
+//   before anything is spent (both the count cap and the dollar cap, atomically) and stamps it
+//   on the job. settle_job releases it against what the call really cost. An event can end
 //   under budget having refused work; it cannot end over budget having done it.
+//
+//   A FAILURE SETTLES BY WHERE IT HAPPENED, not by the fact that it happened. Before the model
+//   answers, nothing was spent and nothing was made: refund the money and the generation.
+//   After it answers, we were charged whatever comes next: book the real cost. "Refund
+//   everything on any failure" reads as prudence and is not — it made the meter read less than
+//   we owed, and left the budget cap enforcing a number nobody was paying.
 //
 //   NOT CONFIGURED IS AN HONEST STATE, NOT AN ERROR LOOP (law 8). With no provider key the
 //   job fails terminally as AI_NOT_CONFIGURED, the reservation is refunded, and the operator
@@ -200,10 +206,19 @@ async function processOneJob(eventId: string): Promise<boolean> {
   const est = Number(ev.ai_est_cost_usd) || 0;
   const started = Date.now();
 
+  // Which side of the paid call we are on. Everything above the model call is free to us;
+  // everything below it has already been charged. The old code did not track this and refunded
+  // every failure to zero, so a generation that was paid for and then failed to upload left the
+  // meter reading less than we owed — and the budget cap protecting a number nobody was paying.
+  let modelCharged = 0;
+  let modelAnswered = false;
+
   // The cap is consumed BEFORE anything is spent. A refusal is terminal for this job — the
   // gate's "cap blocks the N+1th job before spend" — and burns no money and no retry loop.
-  const allowed = await rpc<boolean>("consume_generation", {
-    p_event_id: eventId, p_estimated_cost_usd: est,
+  // The reservation is stamped on the job, so the books can be checked rather than trusted:
+  // an event's spend must always equal what its jobs have paid plus what they are holding.
+  const allowed = await rpc<boolean>("reserve_generation", {
+    p_job_id: job.id, p_estimated_cost_usd: est,
   });
   if (!allowed) {
     await rpc("api_job_failed", { p_job_id: job.id, p_error: "CAP_REACHED", p_model: ev.ai_model });
@@ -216,9 +231,10 @@ async function processOneJob(eventId: string): Promise<boolean> {
 
   try {
     if (!OPENROUTER_KEY) {
-      // Law 8: run honestly unconfigured. Refund the reservation, fail terminally, and let the
-      // moderation queue publish the original. The guest never sees this word.
-      await rpc("settle_generation", { p_event_id: eventId, p_estimated_cost_usd: est, p_actual_cost_usd: 0 });
+      // Law 8: run honestly unconfigured. Refund the reservation AND the generation — nothing
+      // was called and nothing was made — then fail terminally and let the moderation queue
+      // publish the original. The guest never sees this word.
+      await rpc("settle_job", { p_job_id: job.id, p_actual_cost_usd: 0, p_used_generation: false });
       await rpc("api_job_failed", { p_job_id: job.id, p_error: "AI_NOT_CONFIGURED", p_model: null });
       return true;
     }
@@ -233,6 +249,9 @@ async function processOneJob(eventId: string): Promise<boolean> {
     }
 
     const out = await generate(ev, sourceUrl, refUrls, job, photo.style_choice);
+    // From here down the money is gone whatever happens next.
+    modelAnswered = true;
+    modelCharged = out.cost || est;
 
     const resultId = crypto.randomUUID();
     const base = `${eventId}/${resultId}.jpg`;
@@ -252,15 +271,27 @@ async function processOneJob(eventId: string): Promise<boolean> {
       p_job_id: job.id, p_result_photo_id: resultId, p_model: out.model,
       p_latency_ms: Date.now() - started, p_cost_usd: out.cost || est,
     });
-    await rpc("settle_generation", {
-      p_event_id: eventId, p_estimated_cost_usd: est, p_actual_cost_usd: out.cost || est,
+    await rpc("settle_job", {
+      p_job_id: job.id, p_actual_cost_usd: modelCharged, p_used_generation: true,
     });
     return true;
   } catch (err) {
     const message = String((err as Error).message ?? err).slice(0, 200);
-    // Every failure refunds the reservation: the meter reads money spent, not money hoped.
-    await rpc("settle_generation", { p_event_id: eventId, p_estimated_cost_usd: est, p_actual_cost_usd: 0 })
-      .catch(() => {});
+    // The settlement depends on WHERE this failed, and that is the whole of outcome gate 4.
+    //
+    //   before the model answered — signing, a missing source, a timeout on the call itself:
+    //     nothing was spent and nothing was made. Refund the money and the generation, so a
+    //     photo that fails transiently three times does not burn three of the event's N.
+    //
+    //   after the model answered — the upload, the thumbnail, the insert: we were charged.
+    //     Book what it cost. Refunding it here is what let an event quietly exceed a budget
+    //     the cap was still enforcing, and it is the reason the meter is now reconciled
+    //     against the job ledger on every gate run.
+    await rpc("settle_job", {
+      p_job_id: job.id,
+      p_actual_cost_usd: modelAnswered ? modelCharged : 0,
+      p_used_generation: modelAnswered,
+    }).catch(() => {});
     // Transient failures requeue under the attempts ceiling; the sweeper turns exhaustion
     // into a terminal failure. "Failure ⇒ branded original" happens in the queue: the
     // operator approves the original and the guest never sees an error.

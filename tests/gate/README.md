@@ -144,7 +144,7 @@ convinces itself it is finished.
 
 | Suite | Count | Runs against | Proves |
 |---|---|---|---|
-| `run_all_gates()` (SQL) | 182 | **the live production database** | the laws and the data layer, for real |
+| `run_all_gates()` (SQL) | 196 | **the live production database** | the laws and the data layer, for real |
 | `tests/gate/**` (Playwright) | 24 | **`phase-1/mock-api.mjs`**, an in-memory stand-in | client logic: the outbox, wall recovery, the offline law, UI journeys |
 
 One thing has moved across that line since. The deployed function now **tests itself against
@@ -185,7 +185,7 @@ than about a feature existing. They live in `tests/gate/outcome/` and in the SQL
 | 1 | Wall polling: an unchanged cell re-fetches zero image bytes; URLs are cache-stable; the expiry rollover is proven mid-show | `gate_storage()` — the deployed function signs twice and compares, and a recorded rollover run waits past a ten-second reuse window in real time and fetches what it gets back |
 | 2 | Queue depth: a killed kiosk shows its own truth in ops — real depth, honest staleness, never a frozen value | `tests/gate/outcome/queue-depth.spec.ts` |
 | 3 | Sessions: yesterday's sign-in survives showtime unattended; expiry during an outage cannot strand the outbox | `gate_sessions()` for the deployed lifetime; `tests/gate/outcome/sessions.spec.ts` for the client |
-| 4 | AI refunds: a forced post-payment failure reconciles to the cent | *(not yet built)* |
+| 4 | AI refunds: a forced post-payment failure reconciles to the cent; spend == successful generations, under the cap | `gate_ai_refunds()` — the reservation lives on the job, so the meter is reconciled against the job ledger rather than trusted, on the fixture and on every real event |
 
 Each of these was falsified before it was believed: the fix was reverted, the gate was watched
 going red, and the fix put back. A gate that has never failed has not been tested, it has been
