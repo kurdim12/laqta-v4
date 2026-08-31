@@ -144,8 +144,8 @@ convinces itself it is finished.
 
 | Suite | Count | Runs against | Proves |
 |---|---|---|---|
-| `run_all_gates()` (SQL) | 196 | **the live production database** | the laws and the data layer, for real |
-| `tests/gate/**` (Playwright) | 24 | **`phase-1/mock-api.mjs`**, an in-memory stand-in | client logic: the outbox, wall recovery, the offline law, UI journeys |
+| `run_all_gates()` (SQL) | 202 | **the live production database** | the laws and the data layer, for real |
+| `tests/gate/**` (Playwright) | 33 | **`phase-1/mock-api.mjs`**, an in-memory stand-in | client logic: the outbox, wall recovery, the offline law, UI journeys |
 
 One thing has moved across that line since. The deployed function now **tests itself against
 the real buckets** — `ops.selfTest` uploads a real PNG, signs, fetches, compares bytes, retries
@@ -190,6 +190,22 @@ than about a feature existing. They live in `tests/gate/outcome/` and in the SQL
 Each of these was falsified before it was believed: the fix was reverted, the gate was watched
 going red, and the fix put back. A gate that has never failed has not been tested, it has been
 written.
+
+## The should-fix list, in event-impact order
+
+The recorded audit findings, worked down by what breaks a show rather than by what is easiest.
+
+| The finding | What it actually was | Where it is proved |
+|---|---|---|
+| The guest's download | `<a download>` on a cross-origin href does nothing; the phase-5 gate asserted only that the attribute was present | `outcome/guest-download.spec.ts` — clicks it and waits for a real download event |
+| The bilingual pass | The translation was already complete; nothing anywhere kept it that way | `outcome/bilingual.spec.ts` — dictionary parity, no pasted translations, no physical direction CSS, and every surface in Arabic flipping, fitting and leaking no English |
+| Deploy reachability | One constant cache name: any asset at an unchanged URL was pinned forever, and every deploy added bundles nothing pruned — storage pressure aimed at the origin where the outbox lives | `outcome/service-worker.spec.ts` — drives the real built worker, no mock |
+| The sweeper log | Minute-cadence rows, never deleted: ledger item 3 in the table that watches for it | `gate_telemetry_retention()` — bounded, and the probe rows the suite reads are provably not swept |
+| The dead capture path | An unused, exported second way to take a photo that bypassed the outbox | Deleted. Its absence is the fix |
+
+`outcome/service-worker.spec.ts` is the one browser file here that drives no mock: it exercises
+the real service worker in `dist-test`, and simulates a deploy by changing the worker's own
+bytes on disk.
 
 If this suite is ever run somewhere with egress to the project, repointing it is one variable:
 `VITE_API_URL` in `build:test`. Whatever gates run that way should be relabelled here, in this

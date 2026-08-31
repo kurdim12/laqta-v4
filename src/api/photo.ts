@@ -1,4 +1,3 @@
-import { call } from "./client";
 
 // Capture, thumbnailing and upload.
 //
@@ -37,64 +36,17 @@ export async function makeThumbnail(file: Blob, edge = THUMB_EDGE): Promise<Blob
   return blob;
 }
 
-export interface UploadTarget {
-  photoId: string;
-  storagePath: string;
-  thumbPath: string;
-  originalUploadUrl: string;
-  thumbUploadUrl: string;
-}
-
-async function put(url: string, body: Blob): Promise<void> {
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: { "Content-Type": body.type || "image/jpeg" },
-    body,
-  });
-  if (!res.ok) throw new Error(`UPLOAD_FAILED_${res.status}`);
-}
-
-export interface CaptureInput {
-  photoId: string;
-  file: Blob;
-  restyle: boolean;
-  deviceId: string;
-  /** Epoch milliseconds at which the shutter fired on this device. */
-  capturedAt: number;
-  source: "booth" | "kiosk" | "shirt" | "avatar" | "import";
-}
-
-/** The whole journey for one shot: reserve, upload both sizes, register, confirm.
+/* The direct capture path that used to live here — reserve, upload, register, confirm, in one
+ * call — is gone, and its absence is the point. Phase 1 replaced it with the outbox, and what
+ * was left behind was a SECOND WAY TO TAKE A PHOTO that wrote straight to the network with no
+ * queue behind it. Nothing called it. But it was exported, it looked correct, and the first
+ * person to reach for "just send this one shot" would have written the venue-internet-dies
+ * failure back into the product — law 1 undone by a helper that read like a convenience.
+ * Ledger item 9 is about exactly this shape at API scale; it is no better inside one file.
  *
- *  Every step is keyed on a client-minted photo id, so running this twice for the same shot —
- *  which is exactly what a retry after an outage does — converges on one photo rather than
- *  two. That property is what Phase 1's outbox is built on. */
-export async function sendCapture(input: CaptureInput): Promise<{ photoId: string }> {
-  const target = await call<UploadTarget>("photo.uploadUrl", { photoId: input.photoId });
-
-  const thumb = await makeThumbnail(input.file);
-  await put(target.originalUploadUrl, input.file);
-  await put(target.thumbUploadUrl, thumb);
-
-  await call("photo.register", {
-    photoId: target.photoId,
-    storagePath: target.storagePath,
-    thumbPath: target.thumbPath,
-    bytes: input.file.size,
-    kind: "original",
-    deviceId: input.deviceId,
-    // The moment the shutter actually fired, which after an outage is not the moment this
-    // request finally reached the server.
-    clientCapturedAt: new Date(input.capturedAt).toISOString(),
-    captureSource: input.source,
-    // The operator's per-shot decision, recorded by the person who made it. It cannot be
-    // recovered later from whether a job row happens to exist.
-    restyleIntent: input.restyle ? "restyle" : "straight",
-  });
-  await call("photo.confirm", { photoId: target.photoId });
-
-  return { photoId: target.photoId };
-}
+ * Every shot now goes through src/offline/outbox.ts. There is one path, and it survives the
+ * network dying because that is the only path there is.
+ */
 
 /** A stable per-device identity, so ops can tell one booth tablet from another and the
  *  telemetry cap is charged per device rather than to the event as a whole. */
