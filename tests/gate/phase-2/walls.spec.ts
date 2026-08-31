@@ -1,3 +1,7 @@
+// DRIVES: tests/gate/phase-1/mock-api.mjs (an in-memory stand-in), NOT the deployed
+// backend - this container's network policy refuses CONNECT to the project domain.
+// This file proves CLIENT LOGIC. The storage round trip is gated by a human on real
+// infrastructure; see tests/gate/README.md.
 import { expect, test, type Page } from "@playwright/test";
 
 // PHASE 2 GATE — the walls survive the show going wrong.

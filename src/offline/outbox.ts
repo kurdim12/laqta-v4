@@ -95,6 +95,30 @@ export function needsAttention(items: OutboxItem[]): OutboxItem[] {
   return items.filter((i) => (i.hardFailures ?? 0) >= 3);
 }
 
+
+/** The bucket's accepted set. Anything else is re-encoded to JPEG before capture completes. */
+const ACCEPTED = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+async function toAcceptedImage(file: Blob): Promise<Blob> {
+  if (ACCEPTED.has(file.type)) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { bitmap.close?.(); return file; }
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    const out: Blob | null = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.92));
+    return out ?? file;
+  } catch {
+    // A device that cannot re-encode still keeps its photo; the upload may fail and be
+    // surfaced, which is strictly better than dropping the capture here.
+    return file;
+  }
+}
+
 /** The shutter. Writes the photo to disk and returns; it does not wait for a network. */
 export async function enqueue(input: {
   id: string;
@@ -106,11 +130,17 @@ export async function enqueue(input: {
   guestId?: string;
   styleChoice?: string;
 }): Promise<void> {
+  // Both storage buckets accept jpeg, webp and png only. An iPhone shooting HEIC would be
+  // refused by the bucket on every retry, forever, which is a lost photo dressed as patience -
+  // so anything outside the accepted set is re-encoded here, at the shutter, before it is ever
+  // written to the outbox. Failure to re-encode keeps the original rather than losing the shot.
+  const file = await toAcceptedImage(input.file);
+
   // The thumbnail is produced here, at capture, so an outage cannot leave a photo that can
   // never be published for want of one. Law 7 and law 1 meet at this line.
   let thumb: Blob | undefined;
   try {
-    thumb = await makeThumbnail(input.file);
+    thumb = await makeThumbnail(file);
   } catch {
     // A device that cannot decode its own capture still keeps the original; the thumbnail is
     // retried at send time rather than costing us the photo.
@@ -120,7 +150,7 @@ export async function enqueue(input: {
   const item: OutboxItem = {
     id: input.id,
     eventId: input.eventId,
-    file: input.file,
+    file,
     thumb,
     restyle: input.restyle,
     source: input.source,
@@ -167,9 +197,16 @@ async function uploadOne(item: OutboxItem): Promise<void> {
       headers: { "Content-Type": body.type || "image/jpeg" },
       body,
     });
+    if (res.ok) return;
     // A storage object that already exists is a retry landing on its own earlier success,
-    // which is exactly what idempotency is supposed to look like.
-    if (!res.ok && res.status !== 409) throw new ApiError(`UPLOAD_${res.status}`, res.status);
+    // which is exactly what idempotency is supposed to look like. Supabase Storage signals
+    // that as HTTP 400 with {"statusCode":"409"} in the body, NOT as an HTTP 409 - so the
+    // status line alone would turn a successful retry into a permanent failure inside an
+    // infinite-retry loop. Both shapes are read as the same thing.
+    if (res.status === 409) return;
+    const detail = await res.text().catch(() => "");
+    if (/"statusCode"\s*:\s*"?409"?|Duplicate|already exists/i.test(detail)) return;
+    throw new ApiError(`UPLOAD_${res.status}`, res.status);
   };
 
   await send(target.originalUploadUrl, item.file);
@@ -274,6 +311,17 @@ export async function drain(): Promise<{ sent: number; failed: number }> {
           ...item, state: "pending", attempts: item.attempts + 1,
           leasedUntil: undefined, lastError: code, hardFailures: hard,
         });
+        // A failure the network cannot explain is reported once it has happened twice, so a
+        // photo stuck on a tablet in a venue is visible to whoever is holding the ops screen
+        // rather than only to the person standing at that tablet. Fire-and-forget on purpose:
+        // law 3 caps and dedupes this server-side, and telemetry may never block the photo
+        // path - the report failing must cost nothing, so nothing awaits it.
+        if (hard === 2) {
+          void call("ops.report", {
+            service: "outbox", event: "capture_stuck", ok: false,
+            code, error: String(err).slice(0, 200), deviceId: item.deviceId,
+          }).catch(() => { /* the queue does not care whether ops heard */ });
+        }
         // A network failure means the rest of the queue will fail too; stop and wait rather
         // than burning through every item to no purpose.
         if (err instanceof ApiError && err.isOffline) break;

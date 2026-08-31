@@ -43,6 +43,7 @@ export default function Kiosk() {
   const { t, toggle, locale } = useI18n();
   const { session } = useSession();
   const [state, setState] = useState<"idle" | "sending" | "done">("idle");
+  const [shotError, setShotError] = useState<string | null>(null);
   const [queueDepth, setQueueDepth] = useState(0);
   const [guestMode, setGuestMode] = useState<string>("wall_only");
   const [guest, setGuest] = useState<KioskGuest | null>(null);
@@ -119,8 +120,15 @@ export default function Kiosk() {
       });
       setState("done");
       setTimeout(() => setState("idle"), 3500);
-    } catch {
+    } catch (err) {
+      // Never silent. An unattended tablet that returns to "tap to shoot" after
+      // eating a shot is how a guest walks away believing they were photographed.
       setState("idle");
+      setShotError(t.captureFailed);
+      void call("ops.report", {
+        service: "kiosk", event: "capture_failed", ok: false,
+        code: "SHUTTER", error: String(err).slice(0, 200), deviceId: deviceId(),
+      }).catch(() => { /* the guest's shot matters more than the report */ });
     }
   }
 
@@ -197,6 +205,7 @@ export default function Kiosk() {
             {state === "idle" ? t.kioskShoot : state === "sending" ? t.kioskSending : t.kioskDone}
           </button>
 
+          {shotError ? <div className="notice bad" data-shot-error>{shotError}</div> : null}
           {queueDepth > 0 ? (
             <span className="pill warn">{t.queued} · {queueDepth}</span>
           ) : null}

@@ -195,6 +195,7 @@ export default function Admin() {
           <p className="muted" style={{ fontSize: ".85rem", marginBlockStart: -4 }}>
             {t.wallGrid}: #/wall/{event.slug} · {t.wallLed}: #/wall/{event.slug}/led ·{" "}
             {t.wallLightbox}: #/wall/{event.slug}/lightbox · {t.qrKit}: #/qr/{event.slug} ·{" "}
+            {t.surfaceQueue}: #/queue?event={event.id} ·{" "}
             {event.generations_used}/{event.max_generations} ·
             ${Number(event.ai_spend_usd).toFixed(2)}
             {event.ai_budget_usd ? ` / $${Number(event.ai_budget_usd).toFixed(2)}` : ""}

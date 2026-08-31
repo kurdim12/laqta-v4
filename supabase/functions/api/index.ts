@@ -192,6 +192,19 @@ async function eventIdBySlug(slug: string): Promise<string | null> {
   return rows[0]?.id ?? null;
 }
 
+/** The arguments every moderation verb takes: the photo, and exactly one actor. An operator
+ *  may only reach their own event and an admin may reach any — but that rule lives in the
+ *  database (moderation_scope), not here, so a mistake in this file cannot widen it. */
+function moderator(ctx: Ctx): Record<string, unknown> {
+  if (!ctx.session) throw new ApiError("NOT_SIGNED_IN", 401);
+  const isAdmin = ctx.session.kind === "admin";
+  return {
+    p_photo_id: ctx.body.photoId,
+    p_operator_id: isAdmin ? null : ctx.session.id,
+    p_admin_id: isAdmin ? ctx.session.id : null,
+  };
+}
+
 const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
   async ping() {
     return { ok: true, service: "laqta-v3-api" };
@@ -547,38 +560,37 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
 
   /* ---------------------------------------------------------------- moderation (E) */
 
+  /** Feature E: "admin sees all, overrides anything, every override logged." Until 0032 every
+   *  one of these required an operator session and threw 403 for an admin, so the second half
+   *  of that sentence was not true of the product. Both actors are accepted now; the database
+   *  decides what each may touch (an operator is confined to their own event, an admin is not)
+   *  and routes the override to the matching half of the audit trail. */
   async "photo.approve"(ctx) {
-    const { operatorId } = operatorEvent(ctx);
-    return one(await rpc("approve_photo", { p_photo_id: ctx.body.photoId, p_operator_id: operatorId }));
+    return one(await rpc("approve_photo", moderator(ctx)));
   },
 
   async "photo.unapprove"(ctx) {
-    const { operatorId } = operatorEvent(ctx);
-    return one(await rpc("unapprove_photo", { p_photo_id: ctx.body.photoId, p_operator_id: operatorId }));
+    return one(await rpc("unapprove_photo", moderator(ctx)));
   },
 
   async "photo.hide"(ctx) {
-    const { operatorId } = operatorEvent(ctx);
-    return one(await rpc("api_hide_photo", { p_photo_id: ctx.body.photoId, p_operator_id: operatorId }));
+    return one(await rpc("api_hide_photo", moderator(ctx)));
+  },
+
+  async "photo.unhide"(ctx) {
+    return one(await rpc("api_unhide_photo", moderator(ctx)));
   },
 
   async "photo.reject"(ctx) {
-    const { operatorId } = operatorEvent(ctx);
-    return one(await rpc("api_reject_photo", {
-      p_photo_id: ctx.body.photoId, p_operator_id: operatorId, p_reason: ctx.body.reason ?? null,
-    }));
+    return one(await rpc("api_reject_photo", { ...moderator(ctx), p_reason: ctx.body.reason ?? null }));
   },
 
   async "photo.delete"(ctx) {
-    const { operatorId } = operatorEvent(ctx);
-    return one(await rpc("api_delete_photo", {
-      p_photo_id: ctx.body.photoId, p_operator_id: operatorId, p_reason: ctx.body.reason ?? null,
-    }));
+    return one(await rpc("api_delete_photo", { ...moderator(ctx), p_reason: ctx.body.reason ?? null }));
   },
 
   async "photo.useOriginal"(ctx) {
-    const { operatorId } = operatorEvent(ctx);
-    return one(await rpc("api_use_original", { p_photo_id: ctx.body.photoId, p_operator_id: operatorId }));
+    return one(await rpc("api_use_original", moderator(ctx)));
   },
 
   /* ------------------------------------------------------------------- the wall (F, 7)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../i18n";
 import { ApiError, call, messageFor } from "../api/client";
@@ -20,20 +20,26 @@ interface FeedRow {
 export default function Queue() {
   const { t } = useI18n();
   const { session } = useSession();
+  // Feature E: an admin sees all. An operator's session already names their event, so it needs
+  // no parameter; an admin has no single event, so they name one — the admin console links here
+  // with it. The database enforces what each may touch either way (moderation_scope, 0032).
+  const [params] = useSearchParams();
+  const adminEventId = params.get("event");
   const [rows, setRows] = useState<FeedRow[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setRows(await call<FeedRow[]>("moderation.feed", { limit: 60 }));
+      setRows(await call<FeedRow[]>("moderation.feed",
+        adminEventId ? { limit: 60, eventId: adminEventId } : { limit: 60 }));
       setError(null);
     } catch (err) {
       if (err instanceof ApiError && !err.isOffline) {
         setError(messageFor(err.code, t as unknown as Record<string, string>));
       }
     }
-  }, [t]);
+  }, [t, adminEventId]);
 
   useEffect(() => {
     if (!session) return;
@@ -56,7 +62,9 @@ export default function Queue() {
   }
 
   if (!session) return <Navigate to="/operator/login" replace />;
-  if (session.kind !== "operator") return <Navigate to="/" replace />;
+  // An admin without an event named cannot know which queue to show; the console sends them
+  // back with one rather than guessing.
+  if (session.kind === "admin" && !adminEventId) return <Navigate to="/admin" replace />;
 
   const waiting = rows.filter((r) => !r.approved && r.status === "ready");
   const live = rows.filter((r) => r.approved);

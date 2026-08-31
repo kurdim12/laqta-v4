@@ -783,3 +783,99 @@ phases, re-run after every change in this pass.
   queue-depth closures on three kiosks, four moderation verbs missing an event predicate, no
   dollar cap on either live event, registration throttling at ~2 guests/minute, the admin
   being unable to moderate at all). None is a blocker; all are recorded.
+
+---
+
+# Relay: rotate, prepare the real-infra gate, triage — **166/166 SQL · 20/20 client-logic**
+
+## 0. The finish line moved, and the log is relabelled to match
+
+No freeze on mock evidence. Every recorded browser run in the entries above is hereby
+**relabelled a client-logic proof**: all 20 drive `tests/gate/phase-1/mock-api.mjs`, including
+the Phase 7 dress rehearsal. They prove the outbox never loses a photo, that walls recover
+alone, that a switch reaches a wall that was never told — real properties of the client, none of
+them a proof about the deployed backend. Every spec file now says so in its first four lines,
+and `tests/gate/README.md` carries the two-suite table. The 166 SQL checks are unaffected: they
+run directly on the live database and always have.
+
+## 1. Rotation — done, and one item I could not do
+
+Both live operator PINs are rotated through the new path, with fresh randomly-minted
+credentials, and verified end to end: **0 operators authenticate with the published PIN**, both
+new PINs return `ok`, the old one returns `bad_credentials`, the new hashes are `$2a$10$`, and
+both changes are in `audit_log` as `actor_kind = 'admin'`.
+
+**The repo is still public.** There is no MCP tool for repository visibility and no `gh` CLI in
+this container, so this is the one part of the instruction I cannot execute. It is 30 seconds in
+a browser: GitHub → the repo → Settings → scroll to Danger Zone → Change visibility → Make
+private. Worth doing regardless of the rotation, because the old PIN remains in the git history
+permanently.
+
+## 2. The storage gate, made diagnosable
+
+The owner's first end-to-end shot is the gate. `docs/STORAGE-GATE.md` is his four-step page.
+What was built so that a failure is legible rather than mysterious:
+
+- **`#/diag`** — reads the device's own IndexedDB queue, so it tells the truth during an outage,
+  which is exactly when it is needed: device id, online state, per-feature configured/missing,
+  and the exact last error per stuck photo, with a Copy button. It is read-only, so handing an
+  unlocked tablet to a bystander on that screen is safe.
+- **The three kiosks stop swallowing failures.** `catch { setState("idle") }` on Kiosk, Shirt and
+  Avatar returned an unattended tablet to "tap to shoot" after eating a shot — the exact way a
+  guest walks away believing they were photographed. Each now shows a bilingual message and
+  reports the failure.
+- **The outbox reports what the network cannot explain.** A second consecutive hard failure
+  sends one capped, deduped `ops.report`, so a photo stuck on a tablet in Amman is visible on
+  the control room screen. Fire-and-forget: law 3 says telemetry may never block the photo path,
+  so nothing awaits it.
+
+**Two defects fixed pre-emptively, because they would have failed this gate for the wrong
+reason.** Both were in the audit and both are on the exact path the owner is about to walk:
+iPhone HEIC captures would have been refused forever by a JPEG/PNG/WebP bucket (every capture is
+now re-encoded at the shutter), and Supabase Storage reports a duplicate object as HTTP 400 with
+`{"statusCode":"409"}` rather than HTTP 409, which would have turned a successful retry into a
+permanent failure inside an infinite-retry loop (both shapes now read as success).
+
+## 3. Triage, in event-kill order — migration 0032
+
+- **Dollar caps.** `ai_budget_usd` was nullable, `api_create_event` never set it, and both live
+  events had NULL: every event ever created shipped with no dollar ceiling, only a count cap.
+  The column is now NOT NULL with a default; existing nulls were backfilled from what the count
+  cap already implied. Both live events now read **$25.00**.
+- **Admin moderation.** Feature E promises "admin sees all, overrides anything, every override
+  logged". Every moderation verb required an operator and threw 403 for an admin. All seven now
+  accept either actor, `approved_by` stays null for an admin (the audit trail is where their
+  name belongs), and the override is attributed to them by name. `#/queue?event=<id>` is reachable
+  from the admin console, and `photo.unhide` — which existed in the database and was exposed
+  nowhere — is now an action, so hide stops being a one-way door.
+- **Event predicates.** `unapprove`, `hide`, `reject` and `delete` selected `from photos where
+  id = ...` with no event predicate. One `moderation_scope()` now governs all seven verbs: an
+  operator is confined to their own event, an admin is not, and a deactivated operator is
+  neither. Law 5 holds in the database rather than in the caller.
+- **Registration throttle.** The limit is charged per client, and a kiosk is one client for every
+  guest who uses it — so ten per five minutes throttled a whole station to two guests a minute.
+  Raised to 60. The gate proves thirty succeed and that a ceiling still exists above them.
+
+Fourteen new checks. `run_all_gates()`: **166/166**, file byte-identical to the applied statement.
+
+## 4. Repointing the gates at the deployed backend — not feasible here, with evidence
+
+```
+$ curl https://<project>.supabase.co/functions/v1/api
+curl: (56) CONNECT tunnel failed, response 403
+```
+
+The container's network policy refuses CONNECT to the project domain, so Playwright inside it
+cannot drive the deployed backend either. That is a policy and it is not worked around. The
+feasible half was done instead: every gate is labelled with what it actually drives, and
+`tests/gate/README.md` records that repointing is one variable (`VITE_API_URL` in `build:test`)
+for whoever runs this suite somewhere with egress — along with the instruction to relabel only
+the gates that actually change, and leave the rest honestly marked.
+
+## Still open
+
+- The repo is public (owner, 30 seconds, above).
+- The storage round trip is unproven until the owner's shot.
+- The remaining should-fix items, unchanged: signed-URL churn on every wall poll, stale
+  queue-depth closures on three kiosks, the 12-hour session with no client handling, the AI
+  refund-after-paid-call path, and the bilingual pass.

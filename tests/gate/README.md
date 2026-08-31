@@ -135,3 +135,34 @@ select * from run_all_gates() where not pass;   -- expect zero rows
 `gate:phase7:full` is the same run the contract describes, automated so it can be repeated
 before every later change. It does not replace the owner pulling the plug in the venue on real
 hardware — that is the human step, and it is the last one before the freeze.
+
+## What each gate actually drives — read this before quoting a number
+
+There are two suites, and they prove different things. Conflating them is how a build
+convinces itself it is finished.
+
+| Suite | Count | Runs against | Proves |
+|---|---|---|---|
+| `run_all_gates()` (SQL) | 166 | **the live production database** | the laws and the data layer, for real |
+| `tests/gate/**` (Playwright) | 20 | **`phase-1/mock-api.mjs`**, an in-memory stand-in | client logic: the outbox, wall recovery, the offline law, UI journeys |
+
+**Every browser gate is a client-logic proof, including the Phase 7 dress rehearsal.** They
+drive a mock because this build container's network policy refuses CONNECT to the project's
+own domain:
+
+```
+$ curl https://<project>.supabase.co/functions/v1/api
+curl: (56) CONNECT tunnel failed, response 403
+```
+
+That is a policy, not a bug, and it is not worked around. It means the browser suite can prove
+that the outbox never loses a photo, that a wall recovers alone, and that a switch reaches a
+wall that was never told — all of which are real properties of the client — and it cannot prove
+that a photo survives the round trip through the deployed API and Supabase Storage.
+
+**The storage round trip is therefore gated by a human**, on real infrastructure: the owner's
+first end-to-end shot. `#/diag` exists so that if it fails, what failed is legible.
+
+If this suite is ever run somewhere with egress to the project, repointing it is one variable:
+`VITE_API_URL` in `build:test`. Whatever gates run that way should be relabelled here, in this
+table, with the date — and the rest left honestly marked mock-driven.
