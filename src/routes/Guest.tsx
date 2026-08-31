@@ -8,6 +8,47 @@ import { ApiError, call, messageFor } from "../api/client";
 interface GuestPhoto { id: string; createdAt: string; thumbUrl: string | null; downloadUrl: string | null }
 interface GuestResult { outcome: string; photos: GuestPhoto[] }
 
+/** Saving a photo to the guest's phone.
+ *
+ *  The markup below has always carried `<a download>`, and `download` is IGNORED for a
+ *  cross-origin href — which every one of these is, because the photo is served from Supabase
+ *  Storage and the app is not. So the attribute did nothing: the tap opened the JPEG in a new
+ *  tab named after a UUID, and the guest was left to long-press it. In an in-app browser
+ *  (Instagram, WhatsApp — where a scanned QR usually lands) that new tab can dead-end with no
+ *  save affordance at all.
+ *
+ *  Fetching the bytes and saving a blob fixes both halves: a `blob:` URL is same-origin, so
+ *  `download` is honoured and the file gets a name a person recognises. If the fetch fails —
+ *  CORS, a dead uplink, an old browser that ignores `download` on blobs too — nothing is
+ *  swallowed: the handler returns false and the anchor's own navigation proceeds, which is
+ *  exactly the behaviour that shipped before. The enhancement can only add.
+ */
+async function saveToDevice(url: string, filename: string): Promise<boolean> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoked late: Safari reads the blob after the click returns, and revoking synchronously
+    // saves a zero-byte file.
+    setTimeout(() => URL.revokeObjectURL(href), 30_000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A name the guest will recognise in their downloads folder, instead of a storage UUID. */
+function photoFilename(code: string, index: number): string {
+  return `laqta-${code.toLowerCase()}-${index + 1}.jpg`;
+}
+
 /** The delivery row: the guest sends their own gallery to themselves. WhatsApp and SMS links
  *  open the phone's own apps with the message prefilled — the sending path that actually
  *  exists in every guest's pocket, with no gateway, no credential, and nothing to configure
@@ -54,6 +95,9 @@ export default function Guest() {
   const [photos, setPhotos] = useState<GuestPhoto[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which photo is being fetched, so the tapped button says so instead of looking dead on a
+  // venue uplink where a full-size photo takes a few seconds.
+  const [saving, setSaving] = useState<string | null>(null);
 
   const open = useCallback(async (c: string) => {
     setBusy(true);
@@ -111,18 +155,40 @@ export default function Guest() {
           <>
             {openedCode ? <ShareRow code={openedCode} /> : null}
             <div className="tiles" style={{ marginBlockStart: 16 }}>
-              {photos.map((p) => (
-                <div className="tile" key={p.id}>
-                  {p.thumbUrl ? <img src={p.thumbUrl} alt="" /> : null}
-                  <div className="actions">
-                    {p.downloadUrl ? (
-                      <a href={p.downloadUrl} download target="_blank" rel="noreferrer">
-                        <button>{t.download}</button>
-                      </a>
-                    ) : null}
+              {photos.map((p, i) => {
+                const name = photoFilename(openedCode ?? "photo", i);
+                return (
+                  <div className="tile" key={p.id}>
+                    {p.thumbUrl ? <img src={p.thumbUrl} alt="" /> : null}
+                    <div className="actions">
+                      {p.downloadUrl ? (
+                        // The anchor stays real: it is the fallback if the blob save fails, and
+                        // it is what a long-press acts on.
+                        <a
+                          href={p.downloadUrl}
+                          download={name}
+                          data-download={name}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setSaving(p.id);
+                            void saveToDevice(p.downloadUrl!, name).then((saved) => {
+                              setSaving(null);
+                              // Nothing was saved: let the link do what it always did.
+                              if (!saved) window.open(p.downloadUrl!, "_blank", "noreferrer");
+                            });
+                          }}
+                        >
+                          <button disabled={saving === p.id}>
+                            {saving === p.id ? t.loading : t.download}
+                          </button>
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )

@@ -24,7 +24,7 @@ export function Shell({ title, children, wide = false }: {
         </Link>
         <div className="grow" />
         <span className={`pill ${online ? "ok" : "bad"}`}>{online ? t.online : t.offline}</span>
-        <button className="ghost" onClick={toggle} aria-label="language">{t.language}</button>
+        <button className="ghost" onClick={toggle} aria-label={t.switchLanguage}>{t.language}</button>
         {session ? (
           <button
             className="ghost"
