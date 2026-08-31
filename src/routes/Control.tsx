@@ -31,7 +31,16 @@ interface Summary {
   recentOps: { service: string; event: string; ok: boolean; n: number; last_seen_at: string; device_id: string }[];
   recentOverrides: { actor_label: string; action: string; target_kind: string; created_at: string }[];
 }
-interface Health { api: boolean; database: boolean; storage: boolean; openrouter: boolean; anam: boolean }
+interface Health {
+  api: boolean; database: boolean; storage: boolean; openrouter: boolean; anam: boolean;
+  /** The storage round trip's own verdict, from the newest self-test the deployed function ran
+   *  against the real buckets. Optional so an older API deploy degrades to "never proven"
+   *  rather than to a confident tick. */
+  storageProvenAt?: string | null;
+  storageProvenOk?: boolean | null;
+  storageProvenAgeSeconds?: number | null;
+  sessionHours?: number;
+}
 interface Cue {
   id: string; position: number; title_en: string; title_ar: string;
   status: string; fired_at: string | null;
@@ -47,6 +56,15 @@ const SWITCHES = [
   { key: "aiPaused", field: "ai_paused", label: "aiPaused" },
   { key: "bannerActive", field: "banner_active", label: "bannerActive" },
 ] as const;
+
+/** A station's age in words a person reads at a glance. "4823s" is a number nobody converts
+ *  correctly at one in the morning with a queue building. */
+function since(seconds: number): string {
+  const n = Math.max(0, Math.round(seconds));
+  if (n < 60) return `${n}s`;
+  if (n < 3600) return `${Math.floor(n / 60)}m`;
+  return `${Math.floor(n / 3600)}h ${Math.floor((n % 3600) / 60)}m`;
+}
 
 export default function Control() {
   const { t } = useI18n();
@@ -192,8 +210,20 @@ export default function Control() {
                         {s.online ? t.online : t.offline}
                       </span>
                     </td>
-                    <td>{s.queue_depth}</td>
-                    <td className="muted">{s.seconds_ago}s</td>
+                    <td data-station-depth={s.queue_depth}>
+                      {s.queue_depth}
+                      {/* A dead station's depth is the last thing it managed to say, not what
+                          it is holding now — and "0" is the most dangerous of those, because it
+                          reads as "nothing waiting" when the truth is that nobody knows. So an
+                          offline row never shows a bare number; it shows when that number was
+                          true. */}
+                      {!s.online ? (
+                        <span className="muted" style={{ fontSize: ".78rem" }} data-station-stale>
+                          {" "}· {t.asOf} {since(s.seconds_ago)}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="muted">{since(s.seconds_ago)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -227,14 +257,28 @@ export default function Control() {
             <div className="card">
               <h3>{t.configHealth}</h3>
               {health ? (
-                <p style={{ lineHeight: 2 }}>
-                  {(["database", "storage", "openrouter", "anam"] as const).map((k) => (
-                    <span key={k} className={`pill ${health[k] ? "ok" : "warn"}`}
-                          style={{ marginInlineEnd: 6 }}>
-                      {k} {health[k] ? "✓" : `· ${t.configMissing}`}
-                    </span>
-                  ))}
-                </p>
+                <>
+                  <p style={{ lineHeight: 2 }}>
+                    {(["database", "storage", "openrouter", "anam"] as const).map((k) => {
+                      // "storage" used to mean "a URL is configured" — which is true on a
+                      // project where not one byte has ever moved through a bucket. Law 8 asks
+                      // a surface to say honestly whether it works, not whether it was spelled
+                      // correctly, so this pill now carries the round trip's actual verdict.
+                      const ok = k === "storage" ? health.storageProvenOk === true : health[k] === true;
+                      return (
+                        <span key={k} className={`pill ${ok ? "ok" : "warn"}`}
+                              style={{ marginInlineEnd: 6 }} data-health={k}>
+                          {k} {ok ? "✓" : `· ${t.configMissing}`}
+                        </span>
+                      );
+                    })}
+                  </p>
+                  <p className="muted" style={{ fontSize: ".8rem", margin: 0 }} data-storage-proof>
+                    {health.storageProvenAt
+                      ? `${t.storageProven} · ${since(health.storageProvenAgeSeconds ?? 0)}`
+                      : t.storageNeverProven}
+                  </p>
+                </>
               ) : null}
             </div>
           </div>

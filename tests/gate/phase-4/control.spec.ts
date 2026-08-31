@@ -63,8 +63,14 @@ test("a killed station reads offline in the control room within ten seconds", as
   const detectedIn = Date.now() - killedAt;
 
   expect(detectedIn, `offline was shown ${detectedIn}ms after the kill`).toBeLessThanOrEqual(10_000);
-  await expect(row.locator("td").nth(3), "its queue depth is still shown while it is dead")
-    .toHaveText("4");
+  // Its depth is still shown while it is dead — ops needs to know four photos are sitting on a
+  // tablet nobody is holding. Read from the attribute rather than the cell text since outcome
+  // gate 2: an offline row now dates its number instead of stating it as a live fact, so the
+  // cell reads "4 · as of 12s" and asserting the bare text would be asserting the lie back.
+  await expect(row.locator("[data-station-depth]"), "its queue depth is still shown while it is dead")
+    .toHaveAttribute("data-station-depth", "4");
+  await expect(row.locator("[data-station-stale]"), "and dated, not passed off as current")
+    .toHaveCount(1);
 });
 
 test("a switch flipped in the control room reaches a wall that was never told", async ({ page }) => {

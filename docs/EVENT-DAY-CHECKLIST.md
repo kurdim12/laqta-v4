@@ -7,6 +7,21 @@ Times are relative to doors opening.
 
 ---
 
+## First line, every time — is the photo path alive?
+
+- [ ] **Control room → Config health.** The **storage** pill reads green and the line under it
+      says the photo round trip was proven minutes ago, not days.
+
+That one pill is the whole capture path: the system uploads a real image to the real bucket,
+signs a link, fetches it back and compares the bytes — end to end, on the live project, once an
+hour, by itself. Green means a photo taken tonight has somewhere to land. Amber, or a proof
+older than a couple of hours, means stop and read the runbook before anybody shoots: nothing
+else on this page matters if that is red.
+
+*(It re-runs on its own. There is nothing to press.)*
+
+---
+
 ## The night before
 
 - [ ] **Every tablet and screen charged to 100%.** The offline law protects the photos, not

@@ -113,8 +113,9 @@ new Playwright spec. Nothing was ever edited; the suite only grows, and every mi
 landing half-applied.
 
 ```
-npm run gate:all          # every browser gate, phases 1 through 7
+npm run gate:all          # every browser gate: phases 1 through 7, then the outcome gates
 npm run gate:phase7:full  # the rehearsal with the contract's full ten-minute outage
+npm run gate:outcome      # the four architect-attached outcome gates only
 ```
 
 ```sql
@@ -143,8 +144,15 @@ convinces itself it is finished.
 
 | Suite | Count | Runs against | Proves |
 |---|---|---|---|
-| `run_all_gates()` (SQL) | 166 | **the live production database** | the laws and the data layer, for real |
-| `tests/gate/**` (Playwright) | 20 | **`phase-1/mock-api.mjs`**, an in-memory stand-in | client logic: the outbox, wall recovery, the offline law, UI journeys |
+| `run_all_gates()` (SQL) | 182 | **the live production database** | the laws and the data layer, for real |
+| `tests/gate/**` (Playwright) | 24 | **`phase-1/mock-api.mjs`**, an in-memory stand-in | client logic: the outbox, wall recovery, the offline law, UI journeys |
+
+One thing has moved across that line since. The deployed function now **tests itself against
+the real buckets** — `ops.selfTest` uploads a real PNG, signs, fetches, compares bytes, retries
+the duplicate, proves the URL expiry rollover with real elapsed time, and deletes what it made
+— and writes the verdict to `sweeper_runs`, where `gate_storage()` and `gate_sessions()` assert
+it on every run. So the storage round trip and the deployed session lifetime are now in the
+**live** column, proved hourly, without anything routing around the network policy below.
 
 **Every browser gate is a client-logic proof, including the Phase 7 dress rehearsal.** They
 drive a mock because this build container's network policy refuses CONNECT to the project's
@@ -160,8 +168,28 @@ that the outbox never loses a photo, that a wall recovers alone, and that a swit
 wall that was never told — all of which are real properties of the client — and it cannot prove
 that a photo survives the round trip through the deployed API and Supabase Storage.
 
-**The storage round trip is therefore gated by a human**, on real infrastructure: the owner's
-first end-to-end shot. `#/diag` exists so that if it fails, what failed is legible.
+**The storage round trip used to be gated by a human**, on real infrastructure: the owner's
+first end-to-end shot. It is now gated by the deployed function testing itself, hourly, as
+above — which found a real defect on its first production run (signing an upload URL for an
+object that already exists is refused, and that is the retry path). `#/diag` still exists so
+that if a real shot fails in the venue, what failed is legible.
+
+## The outcome gates
+
+Four gates attached by the architect after phase 7, each one a claim about behaviour rather
+than about a feature existing. They live in `tests/gate/outcome/` and in the SQL suite's
+`outcome` phase.
+
+| # | The claim | Where it is proved |
+|---|---|---|
+| 1 | Wall polling: an unchanged cell re-fetches zero image bytes; URLs are cache-stable; the expiry rollover is proven mid-show | `gate_storage()` — the deployed function signs twice and compares, and a recorded rollover run waits past a ten-second reuse window in real time and fetches what it gets back |
+| 2 | Queue depth: a killed kiosk shows its own truth in ops — real depth, honest staleness, never a frozen value | `tests/gate/outcome/queue-depth.spec.ts` |
+| 3 | Sessions: yesterday's sign-in survives showtime unattended; expiry during an outage cannot strand the outbox | `gate_sessions()` for the deployed lifetime; `tests/gate/outcome/sessions.spec.ts` for the client |
+| 4 | AI refunds: a forced post-payment failure reconciles to the cent | *(not yet built)* |
+
+Each of these was falsified before it was believed: the fix was reverted, the gate was watched
+going red, and the fix put back. A gate that has never failed has not been tested, it has been
+written.
 
 If this suite is ever run somewhere with egress to the project, repointing it is one variable:
 `VITE_API_URL` in `build:test`. Whatever gates run that way should be relabelled here, in this

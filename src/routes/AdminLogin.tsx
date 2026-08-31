@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../i18n";
-import { ApiError, call, messageFor } from "../api/client";
+import { ApiError, call, messageFor , expiryOf } from "../api/client";
 import { useSession } from "../state/useSession";
 
 interface LoginResult {
@@ -31,7 +31,8 @@ export default function AdminLogin() {
         setError(messageFor(r.outcome, t as unknown as Record<string, string>));
         return;
       }
-      signIn({ token: r.token, kind: "admin", username: r.admin!.username, displayName: r.admin!.displayName });
+      signIn({ token: r.token, kind: "admin", username: r.admin!.username,
+               displayName: r.admin!.displayName, exp: expiryOf(r.token) });
       navigate("/admin");
     } catch (err) {
       setError(messageFor(err instanceof ApiError ? err.code : "", t as unknown as Record<string, string>));

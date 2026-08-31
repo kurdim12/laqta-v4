@@ -45,6 +45,11 @@ export default function Kiosk() {
   const [state, setState] = useState<"idle" | "sending" | "done">("idle");
   const [shotError, setShotError] = useState<string | null>(null);
   const [queueDepth, setQueueDepth] = useState(0);
+  // The heartbeat closure below is built once and never rebuilt, so reading state
+  // directly would send whatever the depth was at first render - forever. Ops would
+  // read a station holding forty photos as holding zero, which is worse than no
+  // number at all: it is a confident wrong one. The booth has always used a ref.
+  const queueRef = useRef(0);
   const [guestMode, setGuestMode] = useState<string>("wall_only");
   const [guest, setGuest] = useState<KioskGuest | null>(null);
   const [farewell, setFarewell] = useState(false);
@@ -58,13 +63,16 @@ export default function Kiosk() {
   useEffect(() => {
     void warmCutout();
     const stopSync = startSync();
-    const unsub = subscribe((items: OutboxItem[]) =>
-      setQueueDepth(items.filter((i) => i.state !== "done").length));
+    const unsub = subscribe((items: OutboxItem[]) => {
+      const depth = items.filter((i) => i.state !== "done").length;
+      queueRef.current = depth;
+      setQueueDepth(depth);
+    });
 
     const beat = () =>
       call("station.heartbeat", {
         deviceId: deviceId(), kind: "kiosk", label: "Kiosk",
-        queueDepth, appVersion: "phase-5",
+        queueDepth: queueRef.current, appVersion: "phase-5",
       }).catch(() => { /* the kiosk keeps shooting regardless */ });
     beat();
     const timer = setInterval(beat, 3000);

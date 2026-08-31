@@ -25,6 +25,29 @@ export interface StoredSession {
   eventSlug?: string;
   booth?: string;
   role?: string;
+  /** When the token stops being accepted, read out of the token itself at sign-in. Stored so
+   *  a station can say "sign in again" instead of failing every call in silence. */
+  exp?: number;
+}
+
+/** The expiry the server put inside the token. The payload half of an HMAC session is plain
+ *  base64url JSON; reading it is not trusting it — the server still verifies the signature on
+ *  every call. This is only so the device knows when to stop pretending it is signed in. */
+export function expiryOf(token: string): number | undefined {
+  try {
+    const body = token.split(".")[0];
+    const padded = body.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - body.length % 4) % 4);
+    const parsed = JSON.parse(atob(padded)) as { exp?: number };
+    return typeof parsed.exp === "number" ? parsed.exp : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when the stored session is past its expiry. A station that knows this can hold its
+ *  photos and ask for a PIN, instead of retrying a token the server will never accept. */
+export function sessionExpired(s: StoredSession | null): boolean {
+  return Boolean(s?.exp && s.exp <= Date.now());
 }
 
 export function loadSession(): StoredSession | null {
@@ -89,6 +112,16 @@ export async function call<T = unknown>(
   if (!res.ok || payload.ok === false) {
     throw new ApiError(payload.error || "REQUEST_FAILED", res.status);
   }
+
+  // Sliding refresh. A station that is working is a station whose session should not die under
+  // it: past the halfway mark the API returns a fresh token on any call, and it is adopted
+  // here, in the one place every call passes through. A booth polling its feed therefore never
+  // expires mid-show — while a tablet left closed overnight still does, which is the point.
+  const fresh = res.headers.get("x-laqta-session");
+  if (fresh && session) {
+    saveSession({ ...session, token: fresh, exp: expiryOf(fresh) });
+  }
+
   return payload.data as T;
 }
 

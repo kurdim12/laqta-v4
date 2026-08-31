@@ -25,6 +25,9 @@ const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+  // Without this the browser can receive the refreshed session and not be allowed to read it,
+  // which is the same as not sending it at all.
+  "Access-Control-Expose-Headers": "x-laqta-session",
 };
 
 class ApiError extends Error {
@@ -106,11 +109,32 @@ interface Session {
   exp: number;
 }
 
-async function issueSession(s: Omit<Session, "exp">, hours = 12): Promise<string> {
+/* Thirty-six hours, not twelve. A station is signed in the evening before an event and asked
+ * to work through the next night unattended; twelve hours expires it somewhere around the
+ * second guest. Length alone is not the answer though - a long-lived token is a long-lived
+ * credential - so it is paired with sliding refresh below: a station that is working never
+ * expires, and one that has been closed for two days does. */
+const SESSION_HOURS = 36;
+const SESSION_REFRESH_AFTER = 0.5;   // reissue once past halfway
+
+async function issueSession(s: Omit<Session, "exp">, hours = SESSION_HOURS): Promise<string> {
   const payload: Session = { ...s, exp: Date.now() + hours * 3600000 };
   const body = b64url(new TextEncoder().encode(JSON.stringify(payload)));
   const sig = await crypto.subtle.sign("HMAC", await getSigningKey(), new TextEncoder().encode(body));
   return `${body}.${b64url(new Uint8Array(sig))}`;
+}
+
+/** A fresh token for a session past its halfway mark, or null if it is still young. Returned
+ *  in a response header and adopted by the client, so a working station never expires under
+ *  the person using it. The refreshed token carries the same identity and a new clock; it
+ *  cannot widen what the holder may do. */
+async function refreshIfStale(session: Session | null): Promise<string | null> {
+  if (!session) return null;
+  const lifetimeMs = SESSION_HOURS * 3600000;
+  const ageMs = lifetimeMs - (session.exp - Date.now());
+  if (ageMs < lifetimeMs * SESSION_REFRESH_AFTER) return null;
+  const { exp: _drop, ...identity } = session;
+  return await issueSession(identity);
 }
 
 async function readSession(token: string | null): Promise<Session | null> {
@@ -863,10 +887,18 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
    *  the margin between "we stop reusing" and "the signature dies" is assertable by a gate
    *  rather than merely intended. */
   async "ops.health"() {
+    // The storage round trip's own verdict, so the control room can show it and the event-day
+    // checklist can open with a look rather than a leap of faith. Nothing here names a bucket
+    // path or a secret: it is a yes, a no, and a timestamp.
+    const verdict = one<any>(await rpc<any[]>("api_storage_verdict").catch(() => null));
     return {
       api: true,
       database: Boolean(SUPABASE_URL && SERVICE_KEY),
       storage: Boolean(SUPABASE_URL),
+      storageProvenAt: verdict?.proven_at ?? null,
+      storageProvenOk: verdict?.ok ?? null,
+      storageProvenAgeSeconds: verdict?.age_seconds ?? null,
+      sessionHours: SESSION_HOURS,
       openrouter: Boolean(Deno.env.get("OPENROUTER_API_KEY")),
       anam: Boolean(Deno.env.get("ANAM_API_KEY")),
       urlTtlSeconds: URL_TTL_SECONDS,
@@ -900,7 +932,15 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
     ), (c) => c.charCodeAt(0));
 
     const path = `_selftest/${crypto.randomUUID()}.png`;
-    const report: Record<string, unknown> = { path, bytes: PNG_1X1.length };
+    // The deployed function reports its own session configuration here, on every run. A
+    // constant inside a deployed function is exactly the kind of thing that quietly reverts,
+    // and the browser suite runs against a mock, so it cannot see this one. Written into the
+    // report so gate_sessions() reads it from the database rather than taking it on trust.
+    const report: Record<string, unknown> = {
+      path, bytes: PNG_1X1.length,
+      sessionHours: SESSION_HOURS,
+      sessionRefreshAfter: SESSION_REFRESH_AFTER,
+    };
 
     try {
       const uploadUrl = await signedUploadUrl(THUMBS, path);
@@ -932,6 +972,27 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       });
       report.duplicateStatus = again.status;
       report.duplicateBody = again.ok ? "" : (await again.text().catch(() => "")).slice(0, 200);
+
+      // The expiry rollover, on demand and for real. The wall's cache hands back the same URL
+      // string for a while and then must mint a fresh one that still works — the moment that
+      // matters is mid-show, an hour in, when nobody is watching. Asserting it with the
+      // production TTL would mean a fifty-minute request, so the probe signs with a lifetime
+      // whose reuse window is ten seconds, waits past it, and signs again: same code path,
+      // same arithmetic, elapsed rather than simulated. Opt-in, because it costs the wait.
+      if (ctx.body.rollover) {
+        const ttl = URL_EXPIRY_MARGIN_SECONDS + 10;          // reuse window: 10s
+        const before = await signedReadUrl(THUMBS, path, ttl);
+        const waitMs = 12_000;
+        await new Promise((r) => setTimeout(r, waitMs));
+        const after = await signedReadUrl(THUMBS, path, ttl);
+        const check = await fetch(after);
+        report.rolloverTtlSeconds = ttl;
+        report.rolloverReuseSeconds = Math.round(reuseWindowMs(ttl) / 1000);
+        report.rolloverWaitMs = waitMs;
+        report.rolloverMintedNew = before !== after;
+        report.rolloverStillWorks = check.ok;
+        report.rolloverReadStatus = check.status;
+      }
     } finally {
       report.deleted = await storageDelete(THUMBS, path);
       report.elapsedMs = Date.now() - started;
@@ -977,7 +1038,16 @@ Deno.serve(async (req: Request) => {
     // can therefore trigger without any human credential existing anywhere.
     const workerToken = req.headers.get("x-laqta-worker") ?? "";
 
-    return json({ ok: true, data: await handler({ body, session, clientKey, workerToken }) });
+    const data = await handler({ body, session, clientKey, workerToken });
+    const refreshed = await refreshIfStale(session);
+    return new Response(JSON.stringify({ ok: true, data }), {
+      status: 200,
+      headers: {
+        ...CORS,
+        "Content-Type": "application/json",
+        ...(refreshed ? { "x-laqta-session": refreshed } : {}),
+      },
+    });
   } catch (err) {
     const e = err as ApiError;
     const status = e instanceof ApiError ? e.status : 500;

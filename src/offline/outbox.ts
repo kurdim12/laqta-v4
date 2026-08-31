@@ -35,7 +35,18 @@ export function isTransient(code: string | undefined): boolean {
     // Signing an upload URL is a call to storage like any other: a 5xx there is upstream
     // weather, not a photo this device can never send.
     || /^UPLOAD_URL_5\d\d$/.test(code)
+    // A session that expired while the venue was dark is a person's problem, not the photo's.
+    // Counting it as a hard failure would flag every queued shot as broken and bury the one
+    // message that actually fixes it. The photo is fine; it is waiting for a PIN.
+    || code === "NOT_SIGNED_IN"
     || code === "REQUEST_FAILED";
+}
+
+/** True when the queue is stalled because nobody is signed in, rather than because the network
+ *  is down. The booth shows a different thing for each: one asks for patience, the other asks
+ *  for a person. */
+export function needsSignIn(items: OutboxItem[]): boolean {
+  return items.some((i) => i.state !== "done" && i.lastError === "NOT_SIGNED_IN");
 }
 
 const LEASE_MS = 60_000;
@@ -328,8 +339,10 @@ export async function drain(): Promise<{ sent: number; failed: number }> {
           }).catch(() => { /* the queue does not care whether ops heard */ });
         }
         // A network failure means the rest of the queue will fail too; stop and wait rather
-        // than burning through every item to no purpose.
-        if (err instanceof ApiError && err.isOffline) break;
+        // than burning through every item to no purpose. An expired session is the same shape:
+        // every remaining item would fail identically, so the loop stops and the booth asks for
+        // a PIN instead of hammering the API with a token it has already refused.
+        if (err instanceof ApiError && (err.isOffline || err.code === "NOT_SIGNED_IN")) break;
       }
     }
   } finally {

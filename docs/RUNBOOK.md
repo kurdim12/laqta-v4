@@ -119,6 +119,56 @@ The control room (`#/control`) is the whole picture, refreshed every two seconds
   reporting is a sweeper that has stopped.
 - **Activity and overrides** — what happened, and who overrode what.
 
+## 5b. The storage self-test — where the verdict lives
+
+The capture path is the one thing that cannot be proved from a build machine: this container's
+network policy refuses a connection to the project's own domain, so nothing here can upload a
+byte. The deployed function therefore tests itself. `ops.selfTest` uploads a real 1×1 PNG to
+the `thumbs` bucket, signs a read twice, fetches it back, compares the bytes, re-signs and
+re-uploads (the retry path), and deletes what it made. `pg_cron` pokes it hourly.
+
+**The verdict is one row, and this is its address:**
+
+```
+select ran_at, detail
+  from sweeper_runs
+ where sweeper = 'storage_selftest_probe'
+ order by ran_at desc
+ limit 1;
+```
+
+`detail` is jsonb and carries the whole run: `uploadStatus`, `urlStable`, `readStatus`,
+`bytesMatch`, `duplicateStatus`, `deleted`, `elapsedMs`, and the deployed function's own
+`sessionHours` / `sessionRefreshAfter`. A run asked for the expiry rollover (`{"rollover":
+true}`) additionally carries `rolloverTtlSeconds`, `rolloverReuseSeconds`, `rolloverWaitMs`,
+`rolloverMintedNew` and `rolloverStillWorks`.
+
+It is recorded whether it passed or failed — a self-test that only leaves a trace when it
+succeeds is a self-test that hides its own bad news.
+
+Three things read that row, so nobody has to:
+
+| Who | Where | What they see |
+|---|---|---|
+| The gate suite | `gate_storage()`, `gate_sessions()` | the round trip, the rollover, the deployed session lifetime |
+| The control room | Config health → **storage** pill + the line under it | green/amber and how long ago it was proven |
+| The event-day checklist | its opening line | the same pill, as the first thing anyone looks at |
+
+To run it by hand (rollover included — it takes about thirteen seconds):
+
+```
+select net.http_post(
+  url := 'https://<project>.supabase.co/functions/v1/api',
+  body := jsonb_build_object('action','ops.selfTest','rollover',true),
+  headers := jsonb_build_object('Content-Type','application/json',
+    'x-laqta-worker', (select token from worker_tokens where name = 'selftest')),
+  timeout_milliseconds := 40000);
+```
+
+The worker token is the same pattern the AI poke uses: it authenticates callers that are the
+platform itself rather than a person, so `pg_cron` can run this with no human credential
+existing anywhere.
+
 ## 6. Diagnosing
 
 **"A photo is missing."** It is not. Look at the station's queue depth in the control room —

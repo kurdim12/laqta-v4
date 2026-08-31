@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../i18n";
 import { ApiError, call, messageFor } from "../api/client";
 import { useSession } from "../state/useSession";
 import { deviceId } from "../api/photo";
-import { enqueue, kick, list, needsAttention, startSync, subscribe, type OutboxItem } from "../offline/outbox";
+import { enqueue, kick, list, needsAttention, needsSignIn, startSync, subscribe, type OutboxItem } from "../offline/outbox";
 import { warmCutout } from "../api/cutout";
 import { Qr, galleryLink } from "../components/Qr";
 
@@ -20,6 +20,7 @@ interface FeedRow {
 export default function Booth() {
   const { t } = useI18n();
   const { session } = useSession();
+  const navigate = useNavigate();
   const [queue, setQueue] = useState<OutboxItem[]>([]);
   const [feed, setFeed] = useState<FeedRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -150,9 +151,17 @@ export default function Booth() {
       <input ref={fileRef} type="file" accept="image/*" capture="environment"
              onChange={onFile} style={{ display: "none" }} />
 
-      {stuck.length > 0 ? (
+      {/* An expired session is not a broken photo. It is the one failure a person can fix in
+          ten seconds, so it gets its own message and its own button rather than being buried
+          in a count of things that went wrong. */}
+      {needsSignIn(queue) ? (
+        <div className="notice warn" data-needs-signin>
+          {t.signInAgain}{" "}
+          <button className="ghost" onClick={() => navigate("/operator/login")}>{t.signIn}</button>
+        </div>
+      ) : stuck.length > 0 ? (
         <div className="notice warn">
-          {t.failed} · {stuck.length} — {stuck[0].lastError}
+          {t.failed} · {stuck.length} — {messageFor(stuck[0].lastError ?? "", t as unknown as Record<string, string>)}
         </div>
       ) : null}
 

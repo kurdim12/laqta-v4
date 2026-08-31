@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Shell } from "../components/Shell";
 import { useI18n } from "../i18n";
-import { ApiError, call, messageFor } from "../api/client";
+import { ApiError, call, messageFor , expiryOf } from "../api/client";
 import { useSession } from "../state/useSession";
 import { deviceId } from "../api/photo";
 
@@ -47,6 +47,8 @@ export default function OperatorLogin() {
         token: r.token, kind: "operator",
         username: r.operator!.username, displayName: r.operator!.displayName,
         eventId: r.operator!.eventId, eventSlug, booth: r.operator!.booth, role: r.operator!.role,
+        // Stored so the station can tell "expired" from "broken" without asking the server.
+        exp: expiryOf(r.token),
       });
       navigate("/booth");
     } catch (err) {

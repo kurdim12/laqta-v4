@@ -28,16 +28,24 @@ export default function Avatar() {
   const [state, setState] = useState<"idle" | "sending" | "done">("idle");
   const [shotError, setShotError] = useState<string | null>(null);
   const [queueDepth, setQueueDepth] = useState(0);
+  // The heartbeat closure below is built once and never rebuilt, so reading state
+  // directly would send whatever the depth was at first render - forever. Ops would
+  // read a station holding forty photos as holding zero, which is worse than no
+  // number at all: it is a confident wrong one. The booth has always used a ref.
+  const queueRef = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const stopSync = startSync();
-    const unsub = subscribe((items: OutboxItem[]) =>
-      setQueueDepth(items.filter((i) => i.state !== "done").length));
+    const unsub = subscribe((items: OutboxItem[]) => {
+      const depth = items.filter((i) => i.state !== "done").length;
+      queueRef.current = depth;
+      setQueueDepth(depth);
+    });
     const beat = () =>
       call("station.heartbeat", {
         deviceId: deviceId(), kind: "avatar", label: "Avatar kiosk",
-        queueDepth, appVersion: "phase-6",
+        queueDepth: queueRef.current, appVersion: "phase-6",
       }).catch(() => { /* greeting continues regardless */ });
     beat();
     const timer = setInterval(beat, 3000);

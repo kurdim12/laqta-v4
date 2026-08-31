@@ -30,6 +30,40 @@ const guests = new Map();          // guestId -> {name, consent}
 const codes = new Map();           // code -> {photoId|null, guestId|null}
 let lastLoginSlug = "ev-1";        // the mock's stand-in for the operator session's event
 
+/* Sessions, shaped exactly like the real ones: a base64url JSON payload, a dot, and a
+ * signature this mock does not verify. The shape is the part the frontend depends on — it
+ * reads `exp` out of that payload to know, offline and without asking anyone, whether its
+ * credential is still good.
+ *
+ * Note what is NOT enforced here: a request with NO token is served, as it always has been.
+ * The real API refuses those, and that refusal is proved against the live database by
+ * run_all_gates() (the anon key holds no EXECUTE grant on anything). Enforcing it here would
+ * only break the existing gates' raw test helpers while proving nothing new. What this mock
+ * does enforce is the case those gates cannot reach: a token that has EXPIRED. */
+let sessionHours = 36;
+let issuedHoursAgo = 0;
+const PUBLIC_ACTIONS = new Set([
+  "ping", "operator.login", "admin.login", "event.get", "ops.health",
+  "wall.photos", "wall.lightbox", "guest.register", "guest.lookup", "guest.photos",
+]);
+function mintToken(username, ageHours = issuedHoursAgo) {
+  const issuedAt = Date.now() - ageHours * 3600000;
+  const payload = {
+    kind: "operator", id: "op-1", eventId: "ev-1", username,
+    exp: issuedAt + sessionHours * 3600000,
+  };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url") + ".mock";
+}
+function readToken(req) {
+  const auth = req.headers["authorization"];
+  if (!auth) return null;
+  const raw = auth.replace(/^Bearer\s+/i, "");
+  try {
+    const parsed = JSON.parse(Buffer.from(raw.split(".")[0], "base64url").toString("utf8"));
+    return typeof parsed.exp === "number" ? parsed : null;
+  } catch { return null; }
+}
+
 // 32 symbols, no I/L/O/U — the same alphabet generate_guest_code uses, so the frontend's
 // 14-character expectations are tested against codes shaped like the real ones.
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -42,6 +76,15 @@ function modeOf(slug) { return modes.get(slug) ?? "wall_only"; }
 const switches = { wallFrozen: false, panicBrandOnly: false, intakePaused: false, aiPaused: false, bannerActive: false, bannerTextEn: null, bannerTextAr: null };
 const STATION_OFFLINE_MS = 8000;   // mirrors the per-event threshold 0023 defaults to
 let failUntil = 0;                 // simulated server-side outage
+// A venue outage rarely kills every packet equally: one station's photo uploads can be stuck
+// for minutes on a weak uplink while its 200-byte heartbeat still gets out and the control
+// room, on its own connection, sees everything. That case is the one where ops reporting
+// "online, 0 waiting" is an outright lie, so it is reachable here: scope "photos" fails only
+// the capture path and leaves ops and heartbeats alone.
+let outageScope = "all";
+const PHOTO_ACTIONS = new Set([
+  "photo.uploadUrl", "photo.register", "photo.confirm", "photo.setCutout", "photo.enqueue",
+]);
 
 // Wall-under-test state, mutated via /__test/wall. The mock mirrors the real semantics the
 // walls are built against: panic returns nothing, freeze only stops NEW content, and the
@@ -58,10 +101,14 @@ const wall = {
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
+    ...(res.__extraHeaders ?? {}),
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, content-type",
     "Access-Control-Allow-Methods": "POST, PUT, GET, OPTIONS",
+    // The real API sets this too, and must: without it the browser RECEIVES the refreshed
+    // session and is not allowed to read it, which is identical to never sending one.
+    "Access-Control-Expose-Headers": "x-laqta-session",
   });
   res.end(body);
 }
@@ -90,11 +137,22 @@ const server = createServer(async (req, res) => {
       cutouts: [...cutouts.entries()],
       cutoutUploads: [...uploads.keys()].filter((k) => k.startsWith("/upload/c/")).length,
       enqueues: [...enqueues],
+      // What each station last TOLD us, as it told us: the queue-depth gate asserts the
+      // heartbeat carried the real number, which is a different claim from the screen
+      // rendering a number correctly.
+      stations: [...stations.entries()].map(([device_id, v]) => ({ device_id, ...v })),
     });
+  }
+  if (url.pathname === "/__test/session") {
+    // Lets a gate mint "yesterday's sign-in" without waiting a day for one.
+    if (url.searchParams.has("hours")) sessionHours = Number(url.searchParams.get("hours"));
+    if (url.searchParams.has("ageHours")) issuedHoursAgo = Number(url.searchParams.get("ageHours"));
+    return json(res, 200, { ok: true, sessionHours, issuedHoursAgo });
   }
   if (url.pathname === "/__test/outage") {
     failUntil = Date.now() + Number(url.searchParams.get("ms") || 0);
-    return json(res, 200, { ok: true, failUntil });
+    outageScope = url.searchParams.get("scope") === "photos" ? "photos" : "all";
+    return json(res, 200, { ok: true, failUntil, outageScope });
   }
   if (url.pathname === "/__test/mode") {
     modes.set(url.searchParams.get("slug"), url.searchParams.get("mode"));
@@ -118,6 +176,7 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/__test/reset") {
     photos.clear(); registerCalls.length = 0; uploads.clear(); failUntil = 0;
+    outageScope = "all"; sessionHours = 36; issuedHoursAgo = 0;
     cutouts.clear(); enqueues.length = 0; stations.clear(); placements.clear();
     modes.clear(); guests.clear(); codes.clear(); lastLoginSlug = "ev-1";
     cues.clear(); tasks.clear(); shirts.clear(); anamConfigured = false;
@@ -161,10 +220,31 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname !== "/api") return json(res, 404, { ok: false, error: "UNKNOWN" });
 
-  if (Date.now() < failUntil) { res.writeHead(503); return res.end("outage"); }
-
   const body = JSON.parse((await readBody(req)).toString() || "{}");
   const action = body.action;
+
+  if (Date.now() < failUntil && (outageScope === "all" || PHOTO_ACTIONS.has(action))) {
+    res.writeHead(503); return res.end("outage");
+  }
+
+  // An expired credential is refused by name, so the outbox can tell "sign in again" from
+  // "the server is broken" — one is a ten-second fix by the person standing there, the other
+  // is not, and a queue that treats them alike either strands photos or spins forever.
+  const claims = readToken(req);
+  if (claims && !PUBLIC_ACTIONS.has(action) && claims.exp <= Date.now()) {
+    return json(res, 401, { ok: false, error: "NOT_SIGNED_IN" });
+  }
+
+  // Sliding refresh: a session past its halfway mark is handed a fresh one on the way out, so
+  // a station that is being used never expires under the person using it. Same identity, new
+  // clock — it cannot widen what the holder may do.
+  if (claims && !PUBLIC_ACTIONS.has(action)) {
+    const lifetimeMs = sessionHours * 3600000;
+    const ageMs = lifetimeMs - (claims.exp - Date.now());
+    if (ageMs >= lifetimeMs * 0.5) {
+      res.__extraHeaders = { "x-laqta-session": mintToken(claims.username, 0) };
+    }
+  }
 
   switch (action) {
     case "ping":
@@ -176,7 +256,7 @@ const server = createServer(async (req, res) => {
         ok: true,
         data: {
           outcome: "ok",
-          token: "test-token",
+          token: mintToken(body.username),
           operator: {
             id: "op-1", eventId: "ev-1", username: body.username,
             displayName: "Test Operator", booth: "A", role: "operator",
