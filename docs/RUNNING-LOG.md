@@ -1138,3 +1138,135 @@ checks were red in between and nothing else.
   the rollover, and the worker's whole money path — but a diff between the repo file and what
   production is running is not something this environment can compute. Stating it rather than
   implying a check that does not exist.
+
+---
+
+# Log entry — the should-fix list, in event-impact order
+
+Five items, worked by what breaks a show rather than by what is quickest. Every fix carries an
+executable gate, and every gate was falsified before it was believed.
+
+## 1. The guest's download did nothing
+
+`<a href={signedUrl} download>` has been in the gallery since phase 5. **`download` is ignored
+for a cross-origin href**, and every photo URL is cross-origin — the bytes come from Supabase
+Storage, the app does not. So the attribute was inert: the tap opened a JPEG in a new tab named
+after a UUID and left the guest to long-press it. Inside an in-app browser — Instagram,
+WhatsApp, where a scanned QR usually lands — that tab can dead-end with no save affordance at
+all. This is the guest's entire payoff and it has never worked as written.
+
+The phase-5 gate asserted that the anchor **existed**. That is precisely the attribute that
+does nothing. Asserting an attribute is present is not a gate on the behaviour it is supposed
+to produce — the fourth instance of the same shape in this project, after the one-schema law-9
+check, the "is it hashed but is it readable" law-6 check, and the null verdict.
+
+Fixed by fetching the bytes and saving a blob: `blob:` is same-origin, so `download` is
+honoured and the file gets a name a person recognises (`laqta-<code>-1.jpg`) instead of a
+storage key. The anchor stays as the real fallback and the handler returns false rather than
+swallowing failure, so a dead uplink or an old browser lands exactly on the behaviour that
+shipped before. **The new gate clicks the control and waits for a download event**; with the
+old markup restored it times out having never fired.
+
+## 2. The bilingual pass was already done — nothing was keeping it done
+
+On inspection the substance was there: 237 keys in both languages with no gaps, logical CSS
+properties throughout, `dir` and `lang` set on `<html>`. The recorded item was stale. What was
+genuinely missing was any check that keeps it true. A first-class contract requirement that
+nothing asserts is one busy afternoon from decaying — one English string on a kiosk, one
+`margin-left` in a hurry, and nothing anywhere says a word.
+
+So this does not redo the translation, it makes it **enforced**: the dictionaries must stay in
+step, no Arabic value may be the English one pasted across, no physical direction property may
+enter the styles, and every surface in Arabic must flip, fit without sideways scroll, and show
+no untranslated dictionary string.
+
+One real find: the language switcher's own `aria-label` was the hardcoded English word
+"language" — the screen-reader name of the control that switches the app to Arabic.
+
+**And the gate caught itself being too shallow.** The first version walked `/#/guest` and called
+the guest side covered. `/#/guest` with no code is a single input: the tiles, the download and
+the share row all sit behind a lookup, so a hardcoded English label on any of them was
+invisible. Injecting one proved it — the gate stayed green. It now opens a real gallery first.
+A surface is not covered until the gate reaches the state where its strings actually render.
+
+## 3. A deploy could not reach an installed station
+
+The service worker used one constant cache name and an `activate` that deleted only caches
+whose name differed from it — which none ever did. Two consequences:
+
+- Any asset at an unchanged URL was served from cache **forever**. The manifest, the icon,
+  anything added to `public/`: a deploy never reached a station that had already installed.
+- Every deploy **added** its bundles to a cache nothing pruned.
+
+The second is the one that matters. This origin's storage is also where the outbox lives, and
+browsers evict a whole origin under pressure — so unbounded cache growth is a slow leak pointed
+at law 1, and it fires on the night a station has been through twenty deploys.
+
+The shell is now named after a digest of what it references: a new build is a new cache, older
+ones are deleted on activate, and the new one is staged during install and promoted only once
+whole, so a station updating while offline is never left with a half-built cache and no way
+back. **The model is deliberately not versioned with it** — seventy megabytes of
+content-addressed shards re-downloading on a venue uplink because a button colour changed would
+be its own outage. Everything else same-origin is stale-while-revalidate: never slower than the
+cache, and a changed asset reaches the station on the next open instead of never. Network-first
+would have been the obvious fix and the wrong one — it hangs a booth on a dying uplink, which
+is the failure this whole project exists to prevent.
+
+This gate is the one browser file that drives **no mock**: it exercises the real built worker
+and simulates a deploy by changing the worker's own bytes on disk. `registration.update()` on
+identical bytes is a no-op, so a test using it would have proved nothing about activate — the
+first version did exactly that and passed for the wrong reason.
+
+## 4. The sweeper log was ledger item 3, in the table that watches for it
+
+Three sweepers run every minute, each writing a row whether or not it changed anything, and
+nothing had ever deleted one: **9,680 rows in three days** of an otherwise idle project, well
+over a million a year.
+
+The trap is why this is not a one-line DELETE. Some of those rows are not heartbeats, they are
+**evidence** — the 90-second probe proving law 4's clock survives the runtime, the thumbnail
+probe for law 7, the anon-reachability probe for law 9, and the hourly storage self-test whose
+report `gate_storage()` and `gate_sessions()` read on every run. Retention by age alone would
+have deleted the proofs the suite stands on, and the suite would either have gone red or, far
+worse, stayed green while asserting against nothing.
+
+A row is now removed only when it is **both** outside the seven-day window **and** not among its
+sweeper's newest 200. Probes run at most hourly, so they never leave the newest-200 and are
+structurally safe; the minute-cadence heartbeats settle at a bound. Each of the three fixtures
+in the gate isolates one rule, so neither number can be explained by the other.
+
+## 5. A second way to take a photo, sitting unused in the codebase
+
+`sendCapture` was unreferenced, exported, and looked entirely correct: reserve, upload,
+register, confirm, in one call — straight to the network, with no queue behind it. Nothing
+called it. But the first person reaching for "just send this one shot" would have written the
+venue-internet-dies failure back into the product, and it would have reviewed cleanly.
+
+Ledger item 9 is this shape at API scale; it is no better inside one file. Deleted, with the
+reason left in its place. Every shot goes through the outbox, and it survives the network dying
+because that is the only path there is.
+
+## Regression
+
+| Suite | Result |
+|---|---|
+| `run_all_gates()` on the live database | **202/202** |
+| Browser gates (phases 1–7 + outcome) | **33/33** |
+| Migration 0038 | byte-identical to its applied statements |
+
+Migration 0038's first apply failed its own self-verification on a number I had reasoned wrong
+— I expected 201 survivors where the correct answer was 200, because the recent row falls
+inside the newest-200 rather than beside it. The transaction rolled back whole. The gate now
+uses three separate fixtures so each rule is proved on its own.
+
+## Still open
+
+- **The OpenRouter key is not in Supabase secrets.** Owner's browser, under two minutes:
+  Supabase dashboard → Project Settings → Edge Functions → Secrets → add `OPENROUTER_API_KEY`.
+  No deploy needed. Until then no restyling happens, honestly and provably: the job fails
+  `AI_NOT_CONFIGURED`, money and generation are both refunded, and the operator publishes the
+  original.
+- **The repository is still public.** GitHub → Settings → Danger Zone → Change visibility.
+- **Repo↔deploy byte-equality for the Edge Functions.** Noted as closing at freeze by hash
+  handshake: the architect pulls the deployed contents through the connector, the repo copies
+  are hashed here, and the two are compared. Nothing to do until then.
