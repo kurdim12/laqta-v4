@@ -138,15 +138,58 @@ async function readSession(token: string | null): Promise<Session | null> {
 async function signedUploadUrl(bucket: string, path: string): Promise<string> {
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/upload/sign/${bucket}/${path}`, {
     method: "POST",
-    headers: { "apikey": SERVICE_KEY, "Authorization": `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+    headers: {
+      "apikey": SERVICE_KEY,
+      "Authorization": `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json",
+      // Without this, SIGNING an upload URL for an object that already exists is refused —
+      // which is the retry path, not an edge case. The outbox re-asks for upload URLs every
+      // time it retries a photo, so a shot whose bytes landed but whose register call failed
+      // would be refused here forever, on the sign rather than on the PUT. The production
+      // self-test found exactly that; overwriting with identical bytes is what idempotency
+      // means for this pipeline.
+      "x-upsert": "true",
+    },
     body: "{}",
   });
-  if (!res.ok) throw new ApiError("UPLOAD_URL_FAILED", 502);
+  // The status is part of the name: a 502 that says only "failed" cost a full diagnostic round
+  // trip the first time this broke, and the outbox needs the status to tell a retryable
+  // upstream blip from a permanent refusal.
+  if (!res.ok) throw new ApiError(`UPLOAD_URL_${res.status}`, 502);
   const body = await res.json();
   return `${SUPABASE_URL}/storage/v1${body.url}`;
 }
 
-async function signedReadUrl(bucket: string, path: string, expiresIn = 3600): Promise<string> {
+/* A signed URL is a JWT carrying its own issued-at, so signing the same object twice yields two
+ * different strings - and the query string is part of the HTTP cache key. Every wall poll was
+ * therefore handing the browser a brand-new URL for a thumbnail it was already showing, and the
+ * browser dutifully re-downloaded all of them, every few seconds, on the venue uplink whose
+ * death is ledger item 1. Three wall screens at a five-second poll is the same picture fetched
+ * tens of thousands of times an hour.
+ *
+ * The URL is cached by (bucket, path, lifetime) and the same string handed back while it is
+ * comfortably young, so an unchanged cell is byte-identical across polls and the browser stops
+ * asking. REUSE is strictly less than TTL by a wide margin: a URL is retired ten minutes before
+ * it could expire, so no viewer is ever handed a signature that dies in their hands. */
+const URL_TTL_SECONDS = 3600;
+const URL_REUSE_SECONDS = 3000;
+const URL_EXPIRY_MARGIN_SECONDS = 600;
+const URL_CACHE_MAX = 5000;
+
+const urlCache = new Map<string, { url: string; mintedAt: number }>();
+
+/** The reuse window for a given lifetime, always leaving the margin. Exported through
+ *  ops.health so the margin is assertable rather than merely intended. */
+function reuseWindowMs(expiresIn: number): number {
+  return Math.max(0, Math.min(URL_REUSE_SECONDS, expiresIn - URL_EXPIRY_MARGIN_SECONDS)) * 1000;
+}
+
+async function signedReadUrl(bucket: string, path: string, expiresIn = URL_TTL_SECONDS): Promise<string> {
+  const key = `${bucket}:${path}:${expiresIn}`;
+  const now = Date.now();
+  const hit = urlCache.get(key);
+  if (hit && now - hit.mintedAt < reuseWindowMs(expiresIn)) return hit.url;
+
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${bucket}/${path}`, {
     method: "POST",
     headers: { "apikey": SERVICE_KEY, "Authorization": `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
@@ -154,12 +197,33 @@ async function signedReadUrl(bucket: string, path: string, expiresIn = 3600): Pr
   });
   if (!res.ok) throw new ApiError("SIGN_URL_FAILED", 502);
   const body = await res.json();
-  return `${SUPABASE_URL}/storage/v1${body.signedURL}`;
+  const url = `${SUPABASE_URL}/storage/v1${body.signedURL}`;
+
+  // Oldest-first eviction: a Map iterates in insertion order, and an entry is only ever
+  // inserted when freshly minted, so the front of the map is the stalest thing in it.
+  if (urlCache.size >= URL_CACHE_MAX) {
+    for (const k of urlCache.keys()) {
+      urlCache.delete(k);
+      if (urlCache.size <= URL_CACHE_MAX * 0.9) break;
+    }
+  }
+  urlCache.set(key, { url, mintedAt: now });
+  return url;
+}
+
+/** Removes an object from a bucket. Used only by the storage self-test, which cleans up after
+ *  itself; nothing in the product deletes storage objects today (a deleted photo is soft). */
+async function storageDelete(bucket: string, path: string): Promise<boolean> {
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`, {
+    method: "DELETE",
+    headers: { "apikey": SERVICE_KEY, "Authorization": `Bearer ${SERVICE_KEY}` },
+  });
+  return res.ok;
 }
 
 /* ------------------------------------------------------------------------- the actions */
 
-type Ctx = { body: Record<string, any>; session: Session | null; clientKey: string };
+type Ctx = { body: Record<string, any>; session: Session | null; clientKey: string; workerToken: string };
 
 function requireOperator(ctx: Ctx): Session {
   if (!ctx.session || ctx.session.kind !== "operator") throw new ApiError("NOT_SIGNED_IN", 401);
@@ -795,7 +859,9 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
   },
 
   /** Law 8: a surface must be able to say honestly whether it is configured. Nothing here
-   *  reveals a secret's value — only whether it is present. */
+   *  reveals a secret's value — only whether it is present. The URL-cache numbers are here so
+   *  the margin between "we stop reusing" and "the signature dies" is assertable by a gate
+   *  rather than merely intended. */
   async "ops.health"() {
     return {
       api: true,
@@ -803,7 +869,78 @@ const actions: Record<string, (ctx: Ctx) => Promise<unknown>> = {
       storage: Boolean(SUPABASE_URL),
       openrouter: Boolean(Deno.env.get("OPENROUTER_API_KEY")),
       anam: Boolean(Deno.env.get("ANAM_API_KEY")),
+      urlTtlSeconds: URL_TTL_SECONDS,
+      urlReuseSeconds: Math.round(reuseWindowMs(URL_TTL_SECONDS) / 1000),
+      urlExpiryMarginSeconds: URL_TTL_SECONDS - Math.round(reuseWindowMs(URL_TTL_SECONDS) / 1000),
+      urlCacheEntries: urlCache.size,
     };
+  },
+
+  /** The storage round trip, tested by the only process that can: this one. Not one byte had
+   *  ever moved through Supabase Storage in this project's history - every photo passes through
+   *  a signed upload, a PUT and a signed read that had run zero times in production - and the
+   *  build machine cannot reach the project's own domain to try it. So the function tests
+   *  itself: it uploads a real PNG, signs a read, fetches it back, compares the bytes, proves
+   *  the signed URL is stable across two signings, and deletes what it made.
+   *
+   *  Authenticated by the worker token rather than a session, so pg_cron and the gate suite can
+   *  trigger it with no human credential in existence. It writes its result to sweeper_runs, so
+   *  the proof is a row a gate can assert forever rather than a message someone once read. */
+  async "ops.selfTest"(ctx) {
+    const expected = await rpc<string>("worker_token", { p_name: "selftest" });
+    if (ctx.session?.kind !== "admin" && (!expected || ctx.workerToken !== expected)) {
+      throw new ApiError("ADMIN_ONLY", 403);
+    }
+
+    const started = Date.now();
+    // A real 1x1 PNG. The buckets accept jpeg/png/webp by declared type; sending actual PNG
+    // bytes means this proves the path a photo takes, not a path that only accepts test data.
+    const PNG_1X1 = Uint8Array.from(atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    ), (c) => c.charCodeAt(0));
+
+    const path = `_selftest/${crypto.randomUUID()}.png`;
+    const report: Record<string, unknown> = { path, bytes: PNG_1X1.length };
+
+    try {
+      const uploadUrl = await signedUploadUrl(THUMBS, path);
+      const put = await fetch(uploadUrl, {
+        method: "PUT", headers: { "Content-Type": "image/png" }, body: PNG_1X1,
+      });
+      report.uploadStatus = put.status;
+      if (!put.ok) {
+        report.uploadBody = (await put.text().catch(() => "")).slice(0, 300);
+        throw new ApiError("SELFTEST_UPLOAD_FAILED", 502);
+      }
+
+      // Signed twice, deliberately: identical strings are the whole point of the URL cache,
+      // and this is the only place that property can be checked against the real signer.
+      const first = await signedReadUrl(THUMBS, path);
+      const second = await signedReadUrl(THUMBS, path);
+      report.urlStable = first === second;
+
+      const got = await fetch(first);
+      report.readStatus = got.status;
+      const back = new Uint8Array(await got.arrayBuffer());
+      report.readBytes = back.length;
+      report.bytesMatch = back.length === PNG_1X1.length && back.every((b, i) => b === PNG_1X1[i]);
+
+      // A retried upload of an object that already exists: the shape the outbox must read as
+      // success rather than as a permanent failure inside an infinite retry loop.
+      const again = await fetch(await signedUploadUrl(THUMBS, path), {
+        method: "PUT", headers: { "Content-Type": "image/png" }, body: PNG_1X1,
+      });
+      report.duplicateStatus = again.status;
+      report.duplicateBody = again.ok ? "" : (await again.text().catch(() => "")).slice(0, 200);
+    } finally {
+      report.deleted = await storageDelete(THUMBS, path);
+      report.elapsedMs = Date.now() - started;
+      // Recorded whether it passed or failed: a self-test that only leaves a trace when it
+      // succeeds is a self-test that hides its own bad news.
+      await rpc("record_selftest", { p_detail: report }).catch(() => {});
+    }
+
+    return report;
   },
 };
 
@@ -835,7 +972,12 @@ Deno.serve(async (req: Request) => {
     const fwd = req.headers.get("x-forwarded-for");
     const clientKey = (fwd ? fwd.split(",")[0].trim() : "") || "unknown";
 
-    return json({ ok: true, data: await handler({ body, session, clientKey }) });
+    // The same header the AI poke uses. It authenticates callers that are the platform itself
+    // rather than a person - today only the storage self-test, which pg_cron and the gate suite
+    // can therefore trigger without any human credential existing anywhere.
+    const workerToken = req.headers.get("x-laqta-worker") ?? "";
+
+    return json({ ok: true, data: await handler({ body, session, clientKey, workerToken }) });
   } catch (err) {
     const e = err as ApiError;
     const status = e instanceof ApiError ? e.status : 500;

@@ -30,7 +30,12 @@ import { tryCutout } from "../api/cutout";
  *  discarded; it is surfaced. */
 export function isTransient(code: string | undefined): boolean {
   if (!code) return true;
-  return code === "OFFLINE" || /^UPLOAD_5\d\d$/.test(code) || code === "REQUEST_FAILED";
+  return code === "OFFLINE"
+    || /^UPLOAD_5\d\d$/.test(code)
+    // Signing an upload URL is a call to storage like any other: a 5xx there is upstream
+    // weather, not a photo this device can never send.
+    || /^UPLOAD_URL_5\d\d$/.test(code)
+    || code === "REQUEST_FAILED";
 }
 
 const LEASE_MS = 60_000;

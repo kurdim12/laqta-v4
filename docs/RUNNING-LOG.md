@@ -879,3 +879,86 @@ the gates that actually change, and leave the rest honestly marked.
 - The remaining should-fix items, unchanged: signed-URL churn on every wall poll, stale
   queue-depth closures on three kiosks, the 12-hour session with no client handling, the AI
   refund-after-paid-call path, and the bilingual pass.
+
+---
+
+# Relay: wall polling · **175/175 SQL · 20/20 client-logic · the storage gate is CLOSED**
+
+The headline is not the item I was asked to do. It is what doing it found.
+
+## The storage round trip has now run in production, and it was broken
+
+Gate 1 needed a real object in a real bucket to prove a signed URL is stable. Nothing could
+make one: the build machine's proxy refuses CONNECT to the project domain. But the API function
+holds the service key and *can* reach storage — so it now tests itself. `ops.selfTest` uploads a
+real PNG, signs a read, fetches it back, compares bytes, re-signs to prove URL stability,
+re-uploads to exercise the retry path, deletes what it made, and records the result whether it
+passed or failed. It is authenticated by a worker token like the AI poke, so pg_cron and the
+gate suite can trigger it with **no human credential in existence**.
+
+**The first run failed**, at the first step, with `UPLOAD_URL_FAILED`. The second run — after
+reading what the logs actually showed rather than what the error said — revealed the shape:
+
+> **Signing an upload URL for an object that already exists is refused by Supabase Storage.**
+
+That is not an edge case. It is the retry path. The outbox re-asks for upload URLs on every
+retry, so a photo whose bytes landed but whose `register` call failed would be refused *at the
+signing step*, forever, inside an infinite-retry loop — a lost photo wearing the costume of
+patience. And the tolerance I had added the day before was one layer too low: it was on the
+PUT, and the failure is on the SIGN.
+
+Fixed with `x-upsert`. The recorded production run now reads:
+
+```
+uploadStatus 200 · urlStable true · readStatus 200 · bytesMatch true
+duplicateStatus 200 · deleted true · 1273ms
+```
+
+Those are the first bytes ever to move through Supabase Storage in this project's history.
+`gate_storage()` asserts all of it permanently, and `poke_selftest` re-runs it hourly — with a
+staleness check that fails if the proof ever goes older than seven days, because three of this
+suite's existing checks assert frozen historical probes that can never fail again, and I did
+not want to add a fourth.
+
+## Gate 1: wall polling
+
+A signed URL is a JWT carrying its own issued-at, so signing the same object twice yields two
+different strings — and the query string is part of the HTTP cache key. Every wall poll was
+handing the browser a brand-new URL for a thumbnail it was already showing, and the browser
+re-downloaded all of them, every few seconds, on the venue uplink whose death is ledger item 1.
+
+Signed URLs are now cached by `(bucket, path, lifetime)` and the same string returned while it
+is young. **Proven on the deployed function, not a mock**: two consecutive signings of the same
+object return byte-identical strings (`urlStable: true`, recorded). Reuse is 3000s against a
+3600s signature — a ten-minute margin, so a URL is retired well before it could die in a
+viewer's hands, and `ops.health` now reports the numbers so that margin is assertable rather
+than merely intended. Cache is bounded at 5000 entries, oldest-first eviction.
+
+## The gate suite was hiding a check from itself
+
+`gate_storage()` returned `pass = null` for the duplicate check that never ran — and
+`count(*) where not pass` does not count a null. **A check with no verdict silently vanished
+from the failure count instead of failing.** Every gate here is written the same way, so the
+hole existed anywhere a check might produce a null.
+
+`run_all_gates()` now coerces every verdict to false when null, and `gate_suite_integrity()`
+asserts that no check returns a null verdict and that every check names both what it expected
+and what it found. This is the third time this suite has been narrower than its own claim — law
+9 counted only one schema, law 6 asked "is it hashed" but not "is it readable" — and the shape
+is identical each time: **the check tested what was built, not what was missed.**
+
+The first attempt at that migration made the integrity check a member of the union it queries.
+It recursed until the migration timed out, and the transaction rolled the whole thing back
+rather than leaving half of it applied. Split into `run_gate_checks()` (every gate) and
+`run_all_gates()` (that, plus the suite's check on itself).
+
+## Regression
+
+`run_all_gates()`: **175/175**, zero null verdicts. Browser gates **20/20**. Migrations 0033
+and 0034 byte-identical to their applied statements.
+
+## Gates 2, 3 and 4 are not done
+
+Queue depth, sessions and AI refunds are untouched this pass. Gate 1 turned into a production
+defect hunt and I followed it rather than leaving a broken storage path behind a green board.
+Next.
