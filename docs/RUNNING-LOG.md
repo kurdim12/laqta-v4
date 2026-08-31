@@ -962,3 +962,179 @@ and 0034 byte-identical to their applied statements.
 Queue depth, sessions and AI refunds are untouched this pass. Gate 1 turned into a production
 defect hunt and I followed it rather than leaving a broken storage path behind a green board.
 Next.
+
+---
+
+# Log entry — outcome gates 1 (closed), 2, 3 and 4
+
+The three additions the architect asked for, then the three remaining gates. All four outcome
+gates are now built, and each was **falsified before it was believed**: the fix reverted, the
+gate watched going red, the fix put back.
+
+## (a) The rollover, recorded
+
+Gate 1's last clause — "expiry rollover proven mid-show" — is a property of elapsed time, not
+of a single request, and the moment it matters is an hour into a show with nobody watching.
+Asserting it at the production TTL would mean a fifty-minute request.
+
+`ops.selfTest` grew an opt-in probe: it signs with a lifetime whose reuse window is ten
+seconds, waits past it in real time, signs again, and fetches what comes back. Same code path,
+same arithmetic; only the clock is compressed. Run once on the live project:
+
+```
+rolloverTtlSeconds 610 · rolloverReuseSeconds 10 · rolloverWaitMs 12000
+rolloverMintedNew true · rolloverStillWorks true · rolloverReadStatus 200 · elapsedMs 13148
+```
+
+A new URL was minted after the reuse window elapsed, and it fetched the object. `gate_storage()`
+asserts it and is **non-blocking when no rollover run exists** — a gate that goes red because
+an optional probe was skipped teaches people to ignore red, which is how a suite stops being a
+suite.
+
+## (b) and (c) Where the verdict lives, and who reads it first
+
+The event-day checklist now **opens** with it, before the night-before section:
+
+> **Control room → Config health.** The **storage** pill reads green and the line under it says
+> the photo round trip was proven minutes ago, not days.
+
+That pill used to mean "a URL is configured" — which is true on a project where not one byte
+had ever moved through a bucket. It now carries the round trip's real verdict, which is what
+law 8 actually asks of a surface. Nothing to press: the probe is poked hourly.
+
+**The verdict's address, for the architect to read directly:**
+
+```sql
+select ran_at, detail
+  from sweeper_runs
+ where sweeper = 'storage_selftest_probe'
+ order by ran_at desc
+ limit 1;
+```
+
+`detail` is jsonb: `uploadStatus`, `urlStable`, `readStatus`, `bytesMatch`, `duplicateStatus`,
+`deleted`, `elapsedMs`, the deployed function's own `sessionHours` / `sessionRefreshAfter`, and
+the `rollover*` keys on a run that asked for them. Recorded whether it passed or failed.
+`RUNBOOK.md §5b` documents this, and `api_storage_verdict()` is what the control room reads.
+
+## Gate 2 — queue-depth truth
+
+**The bug.** Every kiosk surface read its queue depth out of a React state variable captured
+when the heartbeat interval was created. The closure held the depth at mount — zero — forever.
+A kiosk holding forty photos told ops "0 waiting", cheerfully, every ten seconds. The screen
+was right and the wire was wrong, which is the worst arrangement: the person standing at the
+kiosk can see the truth and the person who has to act on it cannot.
+
+**The second bug, quieter.** The control room rendered an offline station's depth as a bare
+number. A dead station's depth is the last thing it managed to say, not what it is holding now
+— and "0" is the most dangerous of those, because it reads as "nothing waiting" when the truth
+is that nobody knows. An offline row now dates its number.
+
+The gate shoots six photos with the kiosk's photo path dead and its heartbeat alive (the mock
+grew a scoped outage for exactly that case — one station's uploads stuck on a weak uplink while
+ops, on its own connection, sees everything). It asserts the depth **on the wire**, then kills
+the tablet and asserts ops shows offline, still six, and dated; then revives the same browser
+context and watches the number follow reality back to zero with the qualifier gone.
+
+Falsified: with the closure reinstated, the gate reports `Expected 6, Received 0`.
+
+## Gate 3 — session survival
+
+Twelve-hour sessions. Stations are set up the evening before an event and expected to work
+through the following night unattended; twelve hours expires them somewhere around the second
+guest — and because the expiry lands mid-shoot, it lands on a device already holding photos.
+
+- **36 hours, with sliding refresh.** Length alone would be the lazy fix: a long-lived token is
+  a long-lived credential. Past halfway, any call returns a fresh token in an `x-laqta-session`
+  header the client adopts, so a station in use never expires under the person using it while a
+  tablet closed for two days still does.
+- **Expiry cannot strand the outbox.** `NOT_SIGNED_IN` is transient: the drain loop stops
+  instead of burning retries against a wall, nothing is marked permanently failed, and the
+  booth shows a distinct banner asking for the one thing a person can fix in ten seconds.
+
+Three places had to be right for the refresh to work — sent, exposed by CORS, adopted — and the
+mock was wrong in the second one, which is exactly why it is worth having a test that fails.
+
+**The deployed constant is asserted against production, not the mock.** A constant inside a
+deployed function is precisely the kind of thing that quietly reverts, and the browser suite
+runs against a stand-in, so it can only prove the client adopts what it is given. The function
+now reports its own `sessionHours` and `sessionRefreshAfter` into `sweeper_runs` on every
+hourly self-test, and `gate_sessions()` reads it. Redeploy a twelve-hour session and the suite
+goes red within the hour.
+
+Falsified both halves: without the header adoption the refresh gate fails; without
+`NOT_SIGNED_IN` as transient the booth never shows the banner.
+
+## Gate 4 — refund reconciliation
+
+Two things were wrong, and both read as prudence.
+
+**The refund was a lie on one side.** The worker's catch refunded the reservation to zero for
+every failure. But the paid call sits in the middle of that try block: if the model returned
+bytes — and charged us — and the storage upload or the insert then failed, the money is real
+and the meter forgot it. An event could spend past a budget the cap was still cheerfully
+enforcing against a number nobody was paying.
+
+**A refunded generation stayed spent.** `consume_generation` increments `generations_used`;
+`settle_generation` only ever touched dollars. A transient failure gave the money back and kept
+the generation, so three retries of one photo burned three of an event's N and produced nothing.
+
+The fix is not "remember to pass the right number". The reservation now lives **on the job**,
+so the books can be checked rather than trusted:
+
+```
+events.ai_spend_usd     == sum(ai_jobs.spent_usd) + sum(ai_jobs.reserved_usd)
+events.generations_used == sum(ai_jobs.generations_charged) + count(reserved)
+```
+
+The meter equals what we have paid plus what we have promised — true at every instant,
+including mid-generation with a job in flight, and asserted **against every real event** on
+every gate run. A worker deploy that settles the old way never stamps a reservation at all, so
+the invariant breaks on its first real job rather than at the end of an event when the number
+is already wrong and the money already gone.
+
+`settle_job`'s `p_used_generation` has no default: the caller is forced to say which side of
+the paid call it failed on. "Refund everything on any failure" is the shape that hid this.
+
+Falsified: the old behaviour reinstated inside a transaction turns **8 checks red**, the
+headline one reading `a failure after the model was paid books the real cost — expected
+0.0375, actual 0.0000`. Rolled back; green again.
+
+**And the deployed worker was run, not merely read.** ai-worker v5 was deployed and poked
+against the live project with a real queued job: it claimed the job, took a real reservation,
+hit the unconfigured branch, released it and refunded the generation. Both invariants held,
+`reserved_usd` back to null, spend back to 0.0000.
+
+## Regression
+
+| Suite | Result |
+|---|---|
+| `run_all_gates()` on the live database | **196/196** |
+| Browser gates (phases 1–7 + outcome) | **24/24** |
+| Migrations 0035, 0036, 0037 | byte-identical to their applied statements |
+
+Phase 4's station assertion needed updating: it asserted the bare depth text, which is now the
+*less* honest render. It reads the attribute and the staleness marker instead.
+
+Migration 0036 is the one migration since 0009 that did **not** self-verify, deliberately and
+in order: `gate_sessions()` is red until the deployed function reports its constants, so the
+sequence was migration → deploy → self-test → green. It was confirmed that exactly those three
+checks were red in between and nothing else.
+
+## Still open
+
+- **The OpenRouter key is not in Supabase secrets** (`ops.health` reads `openrouter: false`).
+  The system degrades honestly and this was just proven end to end on the live project — the
+  job fails `AI_NOT_CONFIGURED`, the reservation and the generation are both refunded, and the
+  operator publishes the original. No restyling happens until the key is pasted in. **Owner's
+  browser**, under two minutes: Supabase dashboard → Project Settings → Edge Functions →
+  Secrets → add `OPENROUTER_API_KEY`. No deploy needed; the worker reads it per invocation.
+- **The repository is still public.** Owner's browser: GitHub → repo → Settings → Danger Zone →
+  Change visibility → Private.
+- **Repo↔deploy byte-equality for the Edge Functions is not machine-checked.** This container
+  cannot reach `api.supabase.com`, so deploys go through the MCP tool with inline content that
+  I transcribe from the repo file. The changed surfaces were verified *behaviourally* against
+  the deployed functions — `ops.health`'s new fields, `ops.selfTest`'s full report including
+  the rollover, and the worker's whole money path — but a diff between the repo file and what
+  production is running is not something this environment can compute. Stating it rather than
+  implying a check that does not exist.
